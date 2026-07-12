@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────
-# MRunner (Reverie) ProGuard / R8 保留规则
+# Reverie ProGuard / R8 保留规则
 # ──────────────────────────────────────────
 # release 构建启用 isMinifyEnabled + isShrinkResources 后，R8 会
 # 混淆/压缩代码并移除未使用的资源。以下规则确保关键组件不被移除。
