@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Reverie</string>
+    <string name="compat_guide_title">国产 ROM 兼容性设置</string>
+    <string name="battery_optimization">电池优化白名单</string>
+    <string name="autostart">自启动 / 后台保活</string>
+    <string name="overlay">悬浮窗权限</string>
+    <string name="notification_listener">通知监听（角标）</string>
+    <string name="go_settings">去设置</string>
+    <string name="done">已完成</string>
+    <string name="pending">待设置</string>
+    <string name="recent_approx">最近使用（近似）</string>
+    <string name="orientation_lock_channel_name">横屏锁定</string>
+    <string name="orientation_lock_channel_desc">维持 Reverie 强制横屏的前台服务</string>
+    <string name="orientation_lock_title">横屏锁定已启用</string>
+    <string name="orientation_lock_text">正在维持 Reverie 强制横屏</string>
+</resources>

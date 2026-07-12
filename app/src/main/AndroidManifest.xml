@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 枚举已安装应用（筛选游戏/娱乐）所需 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- 使用情况访问：最近游玩列表所需 -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+
+    <!-- 电池优化白名单申请 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- 手柄触感反馈 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 游戏手柄输入 -->
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- 强制横屏服务（前台服务，挂载透明 WindowManager View 约束系统方向） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <!-- 悬浮窗权限：OrientationLockService 使用 TYPE_APPLICATION_OVERLAY 所需。
+         必须在 manifest 中声明，否则系统悬浮窗设置页不会列出该应用（Android 11+）。-->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <application
+        android:name=".LauncherApplication"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_app_logo"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Landscape"
+        android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true">
+
+        <!-- 大屏（≥600dp）豁免强制自适应布局，保持横向 Launcher 横屏锁定（仅 target ≤ 36 有效） -->
+        <property
+            android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+            android:value="true" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:excludeFromRecents="false"
+            android:resumeWhilePausing="true"
+            android:theme="@style/Theme.Landscape">
+            <!-- 普通启动入口：作为独立启动器使用，不是默认桌面 -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".compat.CompatGuideActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.Landscape" />
+
+        <!-- 通知角标监听（ColorOS 默认关闭，需引导用户在系统设置开启） -->
+        <service
+            android:name=".compat.NotificationBadgeService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 强制横屏服务：前台服务类型 system-exempted（仅作方向约束，无用户可见交互） -->
+        <service
+            android:name=".compat.OrientationLockService"
+            android:exported="false"
+            android:foregroundServiceType="systemExempted" />
+
+    </application>
+
+</manifest>

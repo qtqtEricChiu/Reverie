@@ -1,0 +1,22 @@
+<resources>
+    <!-- 深色主题色板（与 Compose Theme 同步） -->
+    <color name="background_dark">#0B0F1A</color>
+    <color name="surface_dark">#1E293B</color>
+    <color name="primary_dark">#22D3EE</color>
+    <color name="secondary_dark">#A855F7</color>
+    <color name="error_dark">#F87171</color>
+    <color name="on_background_dark">#E5E7EB</color>
+
+    <!-- 浅色主题色板 -->
+    <color name="background_light">#F8FAFC</color>
+    <color name="surface_light">#FFFFFF</color>
+    <color name="primary_light">#0F766E</color>
+    <color name="secondary_light">#7C3AED</color>
+    <color name="error_light">#DC2626</color>
+    <color name="on_background_light">#0F172A</color>
+
+    <!-- 语义色 -->
+    <color name="success">#4ADE80</color>
+    <color name="warning">#FBBF24</color>
+    <color name="info">#38BDF8</color>
+</resources>
