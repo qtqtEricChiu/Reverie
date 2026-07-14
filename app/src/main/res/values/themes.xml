@@ -1,10 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.Landscape" parent="android:Theme.Material.Light.NoActionBar">
+
+    <!--
+      Launcher 启动主题（splash 阶段）：API 31+ 原生 SplashScreen。
+      - parent=Theme.SplashScreen 才能被系统识别为 splash 主题，触发 Android 12+ 启动画面规范；
+      - windowSplashScreenBackground = 整屏底色（splash 阶段）
+      - windowSplashScreenAnimatedIcon = 居中前景（adaptive icon foreground，安全区内 108dp）
+      - postSplashScreenTheme = splash 结束后切换到 Theme.Launcher（应用真实主题）
+      - windowSplashScreenBrandingImage = 底部品牌图（brandtext.png，200×80，系统缩至约 80dp 高居中）
+      - windowSplashScreenBackground = @color/splash_bg（#1C1B1F，与默认深色配色 BrandColors.Dark.background 对齐，避免 splash → 首帧颜色跳变；
+        原生 Splash 为静态 XML 色，无法引用莫奈动态色，故仅对齐默认配色）。
+    -->
+    <style name="Theme.Launcher.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/brandtext</item>
+        <item name="postSplashScreenTheme">@style/Theme.Launcher</item>
+        <!--
+          Splash 阶段禁用 ActionBar 与标题：
+          Theme.SplashScreen 默认带 ActionBar 会渲染 app_name="Reverie" 标题条，
+          切到 Theme.Launcher 后窗口换主题会保留 ActionBar 视图导致顶部残留 "Reverie" 标题。
+          显式关闭 + windowFullscreen 让 splash 与运行时统一都是无 ActionBar 全屏。
+        -->
+        <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+    </style>
+
+    <!--
+      Launcher 运行时主题：splash 结束后生效。所有 activity 默认主题。
+      windowBackground 显式设为 background_dark：避免在 Activity 接管窗口前闪白（Material.NoActionBar 默认 windowBackground=白色）。
+    -->
+    <style name="Theme.Launcher" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
         <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowBackground">@color/background_dark</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:enableOnBackInvokedCallback">true</item>
     </style>
+
+    <!-- 别名：Theme.Landscape = Theme.Launcher，向后兼容旧引用 -->
+    <style name="Theme.Landscape" parent="Theme.Launcher" />
 </resources>

@@ -29,9 +29,10 @@
     <application
         android:name=".LauncherApplication"
         android:allowBackup="false"
-        android:icon="@drawable/ic_app_logo"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
-        android:theme="@style/Theme.Landscape"
+        android:theme="@style/Theme.Launcher"
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true">
 
@@ -49,7 +50,7 @@
             android:stateNotNeeded="true"
             android:excludeFromRecents="false"
             android:resumeWhilePausing="true"
-            android:theme="@style/Theme.Landscape">
+            android:theme="@style/Theme.Launcher.Starting">
             <!-- 普通启动入口：作为独立启动器使用，不是默认桌面 -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -60,8 +61,29 @@
         <activity
             android:name=".compat.CompatGuideActivity"
             android:exported="false"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@style/Theme.Landscape" />
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher" />
+
+        <!-- 关于页：独立 Activity，与 CompatGuide 同构（沉浸全屏 + Launcher 主题 + 入场动画） -->
+        <activity
+            android:name=".ui.AboutActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".MainActivity" />
+
+        <!-- 开放源代码许可页：独立 Activity，从 AboutActivity 进入 -->
+        <activity
+            android:name=".ui.LicensesActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".ui.AboutActivity" />
+
+
 
         <!-- 通知角标监听（ColorOS 默认关闭，需引导用户在系统设置开启） -->
         <service

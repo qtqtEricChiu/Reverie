@@ -63,6 +63,10 @@ dependencies {
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.15.0")
+    // SplashScreen 兼容库：提供 Theme.SplashScreen parent 与安装入口。
+    // minSdk=36 时系统已原生支持 SplashScreen，但主题 parent 仍需该库提供。
+    // 在 API 31+ 设备上 installSplashScreen 内部 no-op、仅做主题切换；可视为零开销。
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
