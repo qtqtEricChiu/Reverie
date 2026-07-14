@@ -11,7 +11,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.core.content.edit
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -74,11 +73,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 // 设置页为 HomeScreen 内自定义焦点页（非系统弹窗），其 A/B/方向键/右摇杆
-                // 由 HomeScreen 的事件循环统一驱动，故不交给系统焦点（保持 passthrough=false），
-                // 否则右摇杆滚动等事件会被 GamepadManager 直接吞掉。
+                // 由 HomeScreen 的事件循环统一驱动，故 passthrough=false 以避免系统焦点干扰；
+                // 非设置页面时保持 passthrough=true 让系统处理返回手势与 IME 等默认行为。
                 launch {
                     viewModel.settingsOpen.collect { open ->
-                        gamepad.passthrough = false
+                        gamepad.passthrough = open
                     }
                 }
                 // 挖孔屏适配：监听设置项变化，实时切换 cutout mode
@@ -115,12 +114,10 @@ class MainActivity : ComponentActivity() {
         // 进入空间请求高刷新率，获得满血操作手感（同时刷新交互时间戳）
         lastInteractionMs = System.currentTimeMillis()
         DisplayRefresh.applyHigh(window)
-        // 应用强制横屏（每次回到 Reverie 恢复生效；缺悬浮窗权限时自动禁用并提示）
-        OrientationManager.apply(this, viewModel.settings).also { needPermission ->
-            if (needPermission) {
-                viewModel.requestOverlayForOrientation()
-            }
-        }
+        // 应用强制横屏：应用级方向始终生效；系统级（需悬浮窗权限）为可选增强，
+        // 即使缺权限也不会打断用户——用户可在此使用界面后，再到设置/兼容向导中自行授权。
+        // OrientationManager.apply() 内部已不再因缺悬浮窗权限返回 true（见 OrientationManager.kt）。
+        OrientationManager.apply(this, viewModel.settings)
         // 挖孔屏适配（每次进入 Reverie 确保生效）
         applyCutoutAdapt(viewModel.settings.cutoutAdapt)
     }
@@ -155,10 +152,11 @@ class MainActivity : ComponentActivity() {
         DisplayRefresh.applyBalanced(window)
     }
 
+    /** 首次启动弹出兼容向导（仅此一次），引导用户完成可选权限配置。 */
     private fun maybeShowCompatGuide() {
         val prefs = getSharedPreferences("landscape", MODE_PRIVATE)
         if (!prefs.getBoolean("compat_guide_shown", false)) {
-            prefs.edit { putBoolean("compat_guide_shown", true) }
+            prefs.edit().putBoolean("compat_guide_shown", true).apply()
             startActivity(Intent(this, CompatGuideActivity::class.java))
         }
     }

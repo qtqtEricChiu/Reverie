@@ -50,6 +50,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import cn.mocabolka.run.compat.ColorOSCompat
+import cn.mocabolka.run.compat.OverlayPermissionHelper
 import cn.mocabolka.run.ui.CompatItem
 import cn.mocabolka.run.ui.SettingsRepository
 import cn.mocabolka.run.ui.components.SubPageRow
@@ -63,8 +64,7 @@ import cn.mocabolka.run.gamepad.SubPageGamepad
  * 权限引导页（部分设备需额外系统权限配置）。
  *
  * 设计原则：
- * - 首次启动由 MainActivity.maybeShowCompatGuide() 在 setContent 之前直接拉起，
- *   不先经过 HomeScreen，避免闪烁。
+ * - 由 Settings → 管理权限 主动进入（R14 起不再首次启动自动弹出），也可由其它页面需要权限时拉起。
  * - 沉浸式：独占全屏（隐藏系统状态栏），使用 LandscapeTheme 统一主题（深色/AMOLED/Monet）。
  * - UI 与 About / Licenses 彻底统一：复用 [SubPageScaffold] 框架
  *   （统一 TopBar、焦点状态机、右摇杆滚屏、横竖屏响应式、入场动画）。
@@ -204,7 +204,7 @@ private fun CompatGuideScreen(
                             settings.setCompatDone(CompatItem.OVERLAY, true)
                         }
                     },
-                    "强制横屏、浮动 UI 所需"),
+                    "强制横屏系统级锁定所需"),
                 CompatItemData(CompatItem.USAGE, "使用情况访问", usage,
                     {
                         UsageStatsPermissionHelper.openSettings(context)

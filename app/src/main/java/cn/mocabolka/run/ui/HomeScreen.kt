@@ -1073,6 +1073,20 @@ fun HomeScreen(
         }
     }
 
+    // 导出成功后调起系统分享对话框，用户可将分类映射 json 发给 AI 工具。
+    LaunchedEffect(Unit) {
+        viewModel.shareFileUri.collect { uri ->
+            runCatching {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/json"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "分享分类映射"))
+            }
+        }
+    }
+
     LaunchedEffect(searchActive) {
         if (searchActive) {
             // 进入搜索页时立即激活输入框（INPUT 态），由 ViewModel 状态机驱动 navigationEnabled。
@@ -1486,9 +1500,9 @@ fun HomeScreen(
                                         onOrientationModeChange = { mode ->
                                             viewModel.settings.orientationMode = mode
                                             OrientationManager.onChange(context, viewModel.settings)
-                                            if (OrientationManager.needsOverlayPermission(context, mode)) {
-                                                viewModel.requestOverlayForOrientation()
-                                            }
+                                            // 悬浮窗权限是可选增强——缺权限时系统级强制不生效，
+                                            // 但应用级方向已设，不跳转系统设置页打断用户。
+                                            // 用户可自行在兼容向导中授权。
                                         },
                                         focusedRow = settingsFocusRow,
                                         onFocusedRowChange = { settingsFocusRow = it },
@@ -1952,7 +1966,9 @@ private fun AppList(
     /** 减少动态效果（无障碍）：冻结入场/光晕动画。 */
     reduceMotion: Boolean = false,
     /** 入场重放键：分类/搜索变化时改变以触发逐行错峰入场。 */
-    entranceKey: String = ""
+    entranceKey: String = "",
+    /** R14：是否正在扫描应用（显示加载指示而非空状态文案）。 */
+    isScanning: Boolean = false
 ) {
     if (isEmpty || apps.isEmpty()) {
         val emptyButtonInteraction = remember { MutableInteractionSource() }
@@ -1962,32 +1978,44 @@ private fun AppList(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Dimens.sm)
             ) {
-                Text(
-                    text = emptyText,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium)
-                )
-                // 次级提示（如"收藏"为空）：空串/空白时不渲染，避免裸按键文本占位。
-                if (!emptyHint.isNullOrBlank()) {
-                    Text(
-                        text = emptyHint,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                if (isScanning) {
+                    // R14: 扫描中显示加载骨架屏而非空状态文案，避免短暂闪烁"没有应用"
+                    androidx.compose.material3.LinearProgressIndicator(
+                        modifier = Modifier.width(120.dp).height(2.dp).clip(MaterialTheme.shapes.small)
                     )
-                }
-                // 空列表时提供可聚焦操作按钮，避免手柄无焦点可移
-                if (emptyText != "没有匹配的应用" && emptyText != "收藏夹为空") {
-                    val buttonText = if (!queryAllGranted) "前往授权" else "重新扫描"
-                    wrapFocusBorder(
-                        focused = showGamepadHints && emptyButtonFocused,
-                        modifier = Modifier.focusable(true, emptyButtonInteraction)
-                    ) {
-                        ReverieFilledButton(
-                            onClick = {
-                                if (!queryAllGranted) onOpenPermissionSettings() else onRescan()
-                            },
-                            text = buttonText
+                    Text(
+                        text = "正在扫描…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium)
+                    )
+                } else {
+                    Text(
+                        text = emptyText,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium)
+                    )
+                    // 次级提示（如"收藏"为空）：空串/空白时不渲染，避免裸按键文本占位。
+                    if (!emptyHint.isNullOrBlank()) {
+                        Text(
+                            text = emptyHint,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         )
+                    }
+                    // 空列表时提供可聚焦操作按钮，避免手柄无焦点可移
+                    if (emptyText != "没有匹配的应用" && emptyText != "收藏夹为空") {
+                        val buttonText = if (!queryAllGranted) "前往授权" else "重新扫描"
+                        wrapFocusBorder(
+                            focused = showGamepadHints && emptyButtonFocused,
+                            modifier = Modifier.focusable(true, emptyButtonInteraction)
+                        ) {
+                            ReverieFilledButton(
+                                onClick = {
+                                    if (!queryAllGranted) onOpenPermissionSettings() else onRescan()
+                                },
+                                text = buttonText
+                            )
+                        }
                     }
                 }
             }
@@ -2319,12 +2347,6 @@ private fun HomeTabContent(
                                 onToggleFavorite = onToggleFavorite, favorites = favorites,
                                 badgeOf = badgeOf, query = "", state = currentListState,
                                 isEmpty = isEmpty, emptyText = emptyText, emptyHint = emptyHint,
-                                queryAllGranted = queryAllGranted,
-                                onOpenPermissionSettings = onOpenPermissionSettings,
-                                onRescan = onRescan, showGamepadHints = gamepadConnected,
-                                todayUsageMap = todayUsageMap,
-                                reduceMotion = effectiveReduceMotion,
-                                entranceKey = "$selectedCategory|$query",
                                 modifier = Modifier.weight(1f).fillMaxWidth()
                             )
                         }
@@ -2394,7 +2416,8 @@ private fun HomeTabContent(
                     isEmpty = isEmpty, emptyText = emptyText, emptyHint = emptyHint,
                     queryAllGranted = queryAllGranted,
                     onOpenPermissionSettings = onOpenPermissionSettings,
-                    onRescan = onRescan, showGamepadHints = gamepadConnected,
+                    onRescan = onRescan,
+                    showGamepadHints = gamepadConnected,
                     todayUsageMap = todayUsageMap,
                     reduceMotion = effectiveReduceMotion,
                     entranceKey = "$selectedCategory|$query",

@@ -1149,7 +1149,6 @@ internal fun NativeDatePickerDialog(
         }
     }
 
-    val scrimInteractionSource = remember { MutableInteractionSource() }
 
     // 根据 period 创建对应 state（日=单选 / 月年=范围）
     val isRange = period != StatsPeriod.DAILY
@@ -1217,20 +1216,20 @@ internal fun NativeDatePickerDialog(
         }
     }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(SurfaceTokens.scrim())
-                .clickable(interactionSource = scrimInteractionSource, indication = null, onClick = onDismiss),
+    DialogScaffold(
+        onDismiss = onDismiss,
+        bottomHintContent = {
+            Hint(KeyToken.A, "确认")
+            Hint(KeyToken.B, "关闭")
+        }
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            BoxWithConstraints(
-                modifier = Modifier.fillMaxSize().padding(Dimens.md),
-                contentAlignment = Alignment.Center
-            ) {
-                val dialogMaxW = minOf(Dimens.DialogMaxWidth, maxWidth)
-                val dialogMaxH = maxHeight
-                Surface(
+            val dialogMaxW = minOf(Dimens.DialogMaxWidth, maxWidth)
+            val dialogMaxH = maxHeight
+            Surface(
                     shape = RoundedCornerShape(Dimens.RadiusLg),
                     color = SurfaceTokens.cardSurfaceStrong(),
                     tonalElevation = 6.dp,
@@ -1322,12 +1321,4 @@ internal fun NativeDatePickerDialog(
                 }
             }
         }
-        // 底部按键指示栏：移出卡片，固定到屏幕底部（与全站 dialog 归一）。
-        GamepadBottomHintBar(
-            modifier = Modifier
-                .fillMaxWidth()
-        ) {
-            Hint(KeyToken.A, "确认")
-            Hint(KeyToken.B, "关闭")
-        }
-    }
+    }  // close DialogScaffold

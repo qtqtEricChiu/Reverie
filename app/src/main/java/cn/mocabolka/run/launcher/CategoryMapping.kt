@@ -58,9 +58,9 @@ object CategoryMapping {
 
     /**
      * 导出到公共下载目录（MediaStore，无需存储权限）。
-     * @return 显示文件名；失败返回 null。
+     * @return 导出文件的 content:// Uri；失败返回 null。
      */
-    fun exportToFile(context: Context, content: String): String? = runCatching {
+    fun exportToFile(context: Context, content: String): Uri? = runCatching {
         val resolver = context.contentResolver
         val existingId = resolver.query(
             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
@@ -86,7 +86,7 @@ object CategoryMapping {
         if (existingId == null) {
             resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
         }
-        FILE_NAME
+        uri
     }.getOrNull()
 
     /**

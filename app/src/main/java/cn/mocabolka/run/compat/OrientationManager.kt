@@ -26,10 +26,6 @@ object OrientationManager {
     /** 应用级方向缓存：最近一次应用的 ActivityInfo 方向值，供各 Activity 创建/恢复时读取。 */
     private var appOrientation: Int = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
-    /** 是否需要悬浮窗权限才能启用强制横屏（非跟随系统模式）。 */
-    fun needsOverlayPermission(context: Context, mode: OrientationMode): Boolean =
-        mode != OrientationMode.FOLLOW_SYSTEM && !OverlayPermissionHelper.canDraw(context)
-
     private fun start(context: Context, mode: OrientationMode) {
         val intent = Intent(context, OrientationLockService::class.java).apply {
             putExtra(OrientationLockService.KEY_MODE, mode)
@@ -74,7 +70,11 @@ object OrientationManager {
 
     /**
      * 根据当前设置应用横屏模式（系统级 + 应用级）。
-     * @return 是否需要引导用户授予悬浮窗权限（true 时未启用系统级强制横屏）。
+     * @return 是否缺少悬浮窗权限（true = 系统级强制未启用，但应用级方向已设）。
+     *
+     * 重要：返回 true **仅作日志/内部记录**，调用方 **不得** 据此跳转系统悬浮窗设置页。
+     * 悬浮窗权限是可选增强（系统级强制），缺省时应用级方向依然生效，用户仍可正常使用 App。
+     * 只有用户在设置页主动操作「强制旋屏」项时，才可由设置页自行引导。
      */
     fun apply(context: Context, settings: SettingsRepository): Boolean {
         val mode = settings.orientationMode
@@ -85,9 +85,11 @@ object OrientationManager {
             return false
         }
         if (!OverlayPermissionHelper.canDraw(context)) {
-            // 缺悬浮窗权限：不启用系统级强制，提示引导（应用级方向仍已设置）。
+            // 缺悬浮窗权限：不启用系统级强制（系统级旋转锁 = 增强功能），
+            // 但应用级方向仍已设置，Reverie 自身仍保持目标方向。
+            // 不返回 true 以触发调用方跳转 —— 初始化阶段不应因可选权限打断用户。
             stop(context)
-            return true
+            return false
         }
         start(context, mode)
         return false

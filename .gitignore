@@ -35,3 +35,10 @@ replay_pid*.log
 
 # CodeBuddy project data (not source)
 .codebuddy/
+
+# Temp / backup
+*_original.kt
+check_braces.py
+
+# Release APK output
+app/release/

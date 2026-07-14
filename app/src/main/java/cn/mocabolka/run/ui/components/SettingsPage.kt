@@ -288,7 +288,7 @@ fun SettingsPage(
             ))
             add(SettingItem.Dropdown(
                 label = "强制旋屏",
-                desc = "离开 Reverie 后仍将保持生效（需悬浮窗权限）",
+                desc = "保持 Reverie 自身方向锁定；系统级全局锁定需悬浮窗权限（可选）",
                 icon = Icons.Filled.ScreenRotation,
                 value = orientationMode,
                 options = OrientationMode.SELECTOR_ORDER,
@@ -1104,19 +1104,14 @@ fun DropdownDialog(
     LaunchedEffect(selectedIndex) {
         if (options.isNotEmpty()) listState.animateScrollToItem(selectedIndex)
     }
-    // 与统计页日期选择器统一：全屏遮罩（点击空白关闭，indication=null 屏蔽长按触控水波纹动画）+ 居中 MD3 Surface。
-    val scrimInteractionSource = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SurfaceTokens.scrim())
-            .clickable(
-                interactionSource = scrimInteractionSource,
-                indication = null,
-                onClick = onDismiss
-            )
+    DialogScaffold(
+        onDismiss = onDismiss,
+        bottomHintContent = {
+            Hint(KeyToken.A, "确认")
+            Hint(KeyToken.B, "关闭")
+        }
     ) {
-        // 卡片：限制最大宽度（精致）、柔光渐变背景、点击不冒泡关闭
+        // 卡片：限制最大宽度（精致）+ 点击不冒泡关闭
         Surface(
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
@@ -1125,7 +1120,6 @@ fun DropdownDialog(
                 .widthIn(max = 460.dp)
                 .fillMaxWidth(0.92f)
                 .padding(Dimens.md)
-                // 卡片本体点击不冒泡到遮罩（避免误关）；indication=null 屏蔽卡片内水波纹
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -1190,8 +1184,6 @@ fun DropdownDialog(
                                     .fillMaxWidth()
                                     .then(
                                     if (isHighlighted) Modifier
-                                        // 选中项样式：粗体+check图标始终显示；
-                                        // 边框+背景仅手柄连接时显示（无手柄时用户靠点击互动，选中框无意义）
                                         .then(
                                             if (showFocus) Modifier
                                                 .border(
@@ -1213,17 +1205,6 @@ fun DropdownDialog(
                 }
                 Spacer(Modifier.height(Dimens.xs))
             }
-        }
-        // 底部按键指示栏：移出卡片，固定到屏幕底部（与全站底部栏归一）。
-        // 规则4：删除原 "↑切换/↓结果" 方向键滚动提示；规则3：A 确认/B 关闭在弹窗内
-        // 无按钮旁落点，保留于底部隔离栏（与主页/统计页风格统一）。
-        GamepadBottomHintBar(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-        ) {
-            Hint(KeyToken.A, "确认")
-            Hint(KeyToken.B, "关闭")
         }
     }
 }
@@ -1275,24 +1256,19 @@ fun ConfirmDialog(
     // 与 DropdownDialog / InfoDialog 统一：全屏遮罩（ScrimAlpha）+ 居中 Surface
     // indication=null 屏蔽遮罩长按水波纹触控动画（不影响入场退场与手柄焦点）。
     val scrimInteractionSource = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SurfaceTokens.scrim())
-            .clickable(
-                interactionSource = scrimInteractionSource,
-                indication = null,
-                onClick = onDismiss
-            )
+    DialogScaffold(
+        onDismiss = onDismiss,
+        bottomHintContent = {
+            Hint(KeyToken.A, "确认")
+            Hint(KeyToken.B, "关闭")
+        }
     ) {
         Surface(
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
             modifier = Modifier
-                // 2026-07-14 修复：ConfirmDialog 卡片默认 TopStart 弹到左上角（截图证据），
-                // 必须显式 .align(Center) 才能在 scrim Box 中绝对居中（与 InfoDialog / DropdownDialog 归一）。
-                .align(Alignment.Center)
+                // 卡片在 DialogScaffold 内层 Box(contentAlignment=Center) 中自动居中，无需 .align(Center)。
                 .widthIn(max = 460.dp)
                 .fillMaxWidth(0.92f)
                 .padding(Dimens.md)
@@ -1330,19 +1306,10 @@ fun ConfirmDialog(
                     Spacer(Modifier.width(Dimens.xs))
                     ReverieTextButton(onClick = onConfirm, danger = true, text = "确认")
                 }
-            }
-        }
-        // 底部按键指示栏：移出卡片，固定到屏幕底部（与全站底部栏归一）。
-        GamepadBottomHintBar(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-        ) {
-            Hint(KeyToken.A, "确认")
-            Hint(KeyToken.B, "关闭")
-        }
-    }
-}
+            }  // close Row
+        }  // close Surface
+    }  // close DialogScaffold
+}  // close ConfirmDialog
 
 /**
  * 选项说明对话框（任务 33）：与 DropdownDialog / 日期选择器统一为
@@ -1360,21 +1327,13 @@ fun InfoDialog(
 ) {
     // 与 DropdownDialog / 日期选择器一致的遮罩 + 居中 Surface
     // indication=null 屏蔽遮罩长按水波纹触控动画。
-    val scrimInteractionSource = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SurfaceTokens.scrim())
-            .clickable(
-                interactionSource = scrimInteractionSource,
-                indication = null,
-                onClick = onDismiss
-            )
+    DialogScaffold(
+        onDismiss = onDismiss,
+        showBottomHint = false
     ) {
         BoxWithConstraints(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(Dimens.md),
+                .fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
             val dialogMaxW = minOf(560.dp, maxWidth)
@@ -1449,18 +1408,9 @@ fun InfoDialog(
                             }
                         }
                     }
-                }
-            }
-        }
-        // 底部按键指示栏：移出卡片，固定到屏幕底部（与全站底部栏归一，不再嵌在卡片内）。
-        // 规则2/3：InfoDialog 仅 B 关闭（无按钮旁落点）。
-        GamepadBottomHintBar(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-        ) {
-            Hint(KeyToken.B, "关闭")
-        }
-    }
-}
+                }  // close second Column
+            }  // close first Column
+        }  // close Surface
+    }  // close BoxWithConstraints
+}  // close InfoDialog
 

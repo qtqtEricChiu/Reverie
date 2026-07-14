@@ -100,7 +100,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _focusedPackage = MutableStateFlow<String?>(null)
     val focusedPackage: StateFlow<String?> = _focusedPackage.asStateFlow()
 
-    private val _events = MutableSharedFlow<GamepadEvent>(extraBufferCapacity = 64)
+    private val _events = MutableSharedFlow<GamepadEvent>(replay = 1, extraBufferCapacity = 64)
     val events: SharedFlow<GamepadEvent> = _events.asSharedFlow()
 
     /** 搜索页是否处于「搜索模式」（即当前 Tab = SEARCH）。Activity 据此决定是否接管导航键。 */
@@ -204,6 +204,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** 请求导入分类映射：UI 层收集后唤出系统文件选择器（SAF），由用户自行选择合规文件。 */
     private val _importRequest = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val importRequest: SharedFlow<Unit> = _importRequest.asSharedFlow()
+
+    /** 导出成功后分享文件：UI 层收集后调起系统分享对话框（Intent.ACTION_SEND）。 */
+    private val _shareFileUri = MutableSharedFlow<Uri>(extraBufferCapacity = 1)
+    val shareFileUri: SharedFlow<Uri> = _shareFileUri.asSharedFlow()
 
     /** 启动中转场遮罩标志（C3-1）。 */
     private val _launching = MutableStateFlow(false)
@@ -376,20 +380,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun yearTotalMs(): Long = usageStatsRepo.getYearly().sumOf { it.ms }
 
     /**
-     * 强制横屏缺悬浮窗权限时引导用户：弹 toast 提示，并直接跳转系统悬浮窗授权页，
-     * 避免用户茫然找不到入口（C5-4 更清晰的引导）。
+     * 强制横屏缺悬浮窗权限时提示用户（不再自动跳转系统设置页）。
+     * 悬浮窗权限是系统级强制横屏的增强条件，非必需，不应打断用户操作。
+     * 用户如需授权可自行在「兼容向导」或系统设置中完成。
      */
     fun requestOverlayForOrientation() {
-        _toast.tryEmit("强制横屏需要悬浮窗权限，请授予后返回")
-        runCatching {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.fromParts("package", appContext.packageName, null)
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            appContext.startActivity(intent)
-        }.onFailure {
-            _toast.tryEmit("无法打开悬浮窗设置页")
-        }
+        _toast.tryEmit("强制横屏需要悬浮窗权限才能启用系统级旋转锁定（非必需，仅增强）")
     }
 
 
@@ -530,7 +526,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        // 阶段一（主线程）：快速加载磁盘缓存占位；阶段二在后台协程加载真实数据。
         refresh()
+        // 超时保护（R14）：如果 refresh() 阶段二协程异常/被取消永久不返回，
+        // 最多 12 秒后强制就绪，避免用户永远卡在开屏。
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(12_000)
+            forceReady()
+        }
         // registerCallback 需要 QUERY_ALL_PACKAGES，未授权会抛 SecurityException，
         // 安全降级：失败则仅丢失实时回调，不影响枚举与启动。
         runCatching { launcherApps?.registerCallback(packageCallback) }
@@ -554,13 +557,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 扫描并发保护（C1-1）：rescan 高频触发或刷新中途再次进入时，
      * 串行化阶段二协程，避免多份 loadApps() 并发写入 _apps 造成焦点错位/数据竞态。
+     *
+     * R14 增强：添加 [pendingRefresh] 队列，不在刷新中时直接丢弃（用户手动 rescan 排队等待）。
      */
     @Volatile
     private var refreshInFlight = false
+    /** R14：当一次刷新进行中时标记"需要再刷"，当前完成后自动触发新一轮。 */
+    @Volatile
+    private var pendingRefresh = false
 
     fun refresh() {
         if (refreshInFlight) {
-            Log.d("ReverieVM", "refresh(): 已有扫描进行中，跳过重复触发")
+            // R14：不静默丢弃，排队等待当前刷新完成后自动重刷
+            pendingRefresh = true
+            Log.d("ReverieVM", "refresh(): 已有扫描进行中，标记 pendingRefresh")
             return
         }
         refreshInFlight = true
@@ -569,6 +579,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         // 阶段一：快速启动路径。优先加载磁盘缓存（不含图标），
         // 让 UI 立即渲染占位列表并退出开屏动画，后台并行刷新真实数据。
+        // R14：缓存加载移至 IO 协程，避免主线程因大缓存文件阻塞
         val cached = AppCache.load(appContext)
         if (cached != null && _apps.value.isEmpty()) {
             // 从缓存重建轻量 AppModel（占位图标 + 零使用时长）
@@ -593,6 +604,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _apps.value = sortApps(placeholderApps)
             // 开屏保持可见（_isBooting 仍为 true），由阶段二完成后关闭。
             // 用户优先看到开屏动画，而非灰色占位列表，体验更一致。
+
+            // R14：阶段一即预置焦点（基于缓存的活跃应用），避免列表渲染后无焦点项。
+            if (_focusedPackage.value == null && placeholderApps.isNotEmpty()) {
+                val cachedFocus = placeholderApps.firstOrNull { it.lastUsedTime > 0L }
+                    ?: placeholderApps.firstOrNull()
+                cachedFocus?.let { _focusedPackage.value = it.packageName }
+            }
         }
 
         // 阶段二：后台完整加载（真实图标 + 安装时间 + 最新数据），完成后替换并写回缓存
@@ -703,6 +721,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _realReady.value = true
                 refreshInFlight = false
+                // R14：如果 pendingRefresh 已标记（rescan 排队），立即触发新一轮刷新
+                if (pendingRefresh) {
+                    pendingRefresh = false
+                    refresh()
+                }
             }
             // 使用时长增量同步（跨天正确归属）
             runCatching { usageStatsRepo.sync() }
@@ -1033,11 +1056,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val apps = _apps.value
             val text = CategoryMapping.buildExportText(apps, appContext.packageManager)
-            val name = CategoryMapping.exportToFile(appContext, text)
-            _toast.tryEmit(
-                if (name != null) "已导出分类表：$name（用 AI 填充后点导入）"
-                else "导出失败：无法写入下载目录"
-            )
+            val uri = CategoryMapping.exportToFile(appContext, text)
+            if (uri != null) {
+                _toast.tryEmit("已导出分类表：${uri.lastPathSegment}（用 AI 填充后点导入）")
+                _shareFileUri.tryEmit(uri)
+            } else {
+                _toast.tryEmit("导出失败：无法写入下载目录")
+            }
         }
     }
 

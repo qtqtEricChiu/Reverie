@@ -202,7 +202,14 @@ class UsageStatsRepository(private val context: Context) {
             val staleThreshold = now - MAX_SINGLE_DURATION_MS
             openMap.entries.removeAll { it.value < staleThreshold }
 
-            lastSync = now
+            // 关键修复：仅在实际拉到事件时才推进 lastSync。
+            // 首次 sync() 可能在用户授权前就被调用（应用启动刷新循环），
+            // 此时 queryEvents 因无权限返回空，但若仍推进 lastSync，
+            // 会导致授权后第二次 sync 使用 lastSync（而非 30 天窗口）作为起始点——
+            // 30 天历史窗口永久丢失，用户只能看到授权之后的数据。
+            if (changed.isNotEmpty() || lastSync > 0L) {
+                lastSync = now
+            }
             // 更新小时分布缓存
             if (changed.isNotEmpty() || _hourlyDateKey != todayKey) {
                 _hourlyCache = hourlyAcc
