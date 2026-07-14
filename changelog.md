@@ -227,6 +227,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and the 
   - `BoxWithConstraints` scope 误判修复 2 处：1629 删除中间 val 让 lint 直接看到 `maxHeight` 被使用；2305 真正无消费者时 `BoxWithConstraints` → `Box`
 - **保留为 IDE 误报**：`BoxWithConstraints scope:1650/2428`（实际使用 FQN 但 lint 缓存误判，Invalidate Caches 后消失）；`mutableStateOf(0f)/(0L)/(false)` 语义不可改
 
+### 初始化流程全面调整（2026-07-14）
+- **HomeViewModel**：`init{}` 添加 `forceReady()` 超时保护（12s），防止 `refresh()` 协程被取消后永久卡在开屏；`events` SharedFlow 新增 `replay=1`，确保迟到收集器不丢事件；`refresh()` 添加 `pendingRefresh` 排队机制，当前刷新进行中时 `rescan()` 不再静默丢弃，等待完成后自动触发新一轮；阶段一缓存加载后即预置初始焦点（基于缓存活跃应用），避免列表渲染后无焦点项。
+- **MainActivity**：`settingsOpen` 收集器修复（`passthrough = open`，非设置页时恢复 `true` 让系统处理 IME / 返回手势）；移除 `maybeShowCompatGuide()` 首次启动自动弹出与 `requestOverlayForOrientation()` 调用。
+- **HomeScreen**：`AppList` 新增 `isScanning` 参数，扫描中且列表为空时显示「正在扫描…」+ 进度条动画，避免空状态文字闪烁；3 个 AppList 调用点 + 搜索列表调用点全部传入 `isScanning`。
+
+### Dialog 全局归一化整合（2026-07-14）
+- 新建 `ui/components/DialogScaffold.kt`：统一全屏遮罩(scrim) + 居中卡片 + 底部 HintBar(可选) 模板，4 个 dialog 全部接入：
+  - `DropdownDialog`：原 Surface 缺少 `.align(Center)` → 竖屏 TopStart 修复（DialogScaffold 内建 `Box(contentAlignment=Center)`）。
+  - `ConfirmDialog`：移除不再需要的 `.align(Center)`（DialogScaffold 自动居中）。
+  - `InfoDialog`：保持 `BoxWithConstraints` 用于尺寸计算，`showBottomHint=false`。
+  - `NativeDatePickerDialog`：底部 `GamepadBottomHintBar` 此前缺失 `.align(BottomCenter)`，DialogScaffold 统一补齐。
+  - 移除无人引用的 `scrimInteractionSource` + `MutableInteractionSource`（StatsScreen）。
+
+### 文档与发布（2026-07-14）
+- **README 重写**：根据最新 changelog（覆盖至 07-14）和完整源码，全面重写 `README.md` 为中文版，涵盖双态导航、右摇杆物理引擎、焦点框智能显示、MD3 按钮库、SurfaceTokens、Waterfall、FocusScroll、BrandColors、原生 DatePicker、Adaptive Icon + Splash 收口等 10+ 新模块。版本标记 v1.0.0 (2)。
+- **v1.0.0 GitHub Release**：APK 从 `app-release.apk` 更名为 `Reverie-v1.0.0-release.apk`；创建 git tag `v1.0.0` 并推送；通过 GitHub API 创建 Release 并上传 APK asset。Release URL: https://github.com/qtqtEricChiu/Reverie/releases/tag/v1.0.0
+
 ---
 
 ## [0.1.0 (1)]
