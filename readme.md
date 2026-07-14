@@ -9,7 +9,7 @@
 </p>
 
 <h1 align="center">Reverie</h1>
-<h3 align="center">大屏横屏游戏空间启动器</h3>
+<h3 align="center"><sub><em>千万次相逢的理由</em></sub></h3>
 
 <p align="center">
   <strong>Landscape Game-Space Launcher for Android TV / Tablet / Handheld</strong>
@@ -25,6 +25,9 @@
 
 <p align="center">
   <sub>© MocaBolka 2026 · co-created with CodeBuddy</sub>
+  </p>
+  <p align="center">
+  <sub>包括本文档及程序在内均包含AI辅助生成。不代表本人立场。</sub>
 </p>
 
 ---
@@ -64,7 +67,7 @@
 
 ## 30 秒了解
 
-**Reverie**（原名 MRunner）是一个面向电视、平板与掌机的**横屏 Android 启动器**。它把设备上已安装的游戏和娱乐应用整理成一个干净的大屏界面，并且从导航、启动、搜索到设置，**全程用手柄即可完成，无需触摸**。
+**Reverie**是一个面向电视、平板与掌机的**横屏 Android 启动器**。它把设备上已安装的游戏和娱乐应用整理成一个干净的大屏界面，并且从导航、启动、搜索到设置，**全程用手柄即可完成，无需触摸**。
 
 它不是系统默认桌面，而是作为一个普通应用独立运行——图标启动即进入游戏空间。首页采用**列表态 / 详情态双态导航**：左摇杆上下浏览应用列表，A 键进入详情面板，再按 A 启动，B 退回列表。任何旋屏设备均可通过内置**强制横屏锁**锁定横屏。
 
