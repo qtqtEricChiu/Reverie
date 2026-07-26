@@ -22,11 +22,13 @@ import androidx.lifecycle.viewModelScope
 import cn.mocabolka.run.gamepad.Direction
 import cn.mocabolka.run.gamepad.DialogLayer
 import cn.mocabolka.run.gamepad.GamepadEvent
+import cn.mocabolka.run.gamepad.GamepadDetector
 import cn.mocabolka.run.launcher.AppCache
 import cn.mocabolka.run.launcher.AppLauncher
 import cn.mocabolka.run.launcher.categoryLabel
 import cn.mocabolka.run.launcher.AppModel
 import cn.mocabolka.run.launcher.AppRepository
+import cn.mocabolka.run.util.matchesSearch
 import cn.mocabolka.run.launcher.CategoryOverrideRepository
 import cn.mocabolka.run.launcher.CategoryMapping
 import cn.mocabolka.run.launcher.FavoritesRepository
@@ -44,7 +46,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import java.util.Calendar
 
 /** 应用列表排序方式。 */
@@ -52,8 +57,10 @@ enum class SortMode { NAME, INSTALL_TIME, CATEGORY, LAST_USED }
 
 /**
  * 搜索页手柄焦点目标状态（2026-07-13 专项重构）。
- * - [INPUT]：焦点在搜索输入框，禁用手柄导航（navigationEnabled=false），让位 IME 光标；
- * - [LIST]：焦点在搜索结果列表，左摇杆/方向键控制列表焦点。
+ * - [INPUT]：焦点在搜索输入框，禁用手柄导航（navigationEnabled=false，让位 IME 光标）；
+ *   但左摇杆 DOWN 作为「焦点贯通」手势仍被放行（GamepadManager.searchInputExitDown），
+ *   可无缝进入下方应用列表首项；
+ * - [LIST]：焦点在搜索结果列表，左摇杆/方向键控制列表焦点（上下移动、左右 no-op）。
  */
 enum class SearchFocusTarget { INPUT, LIST }
 
@@ -68,6 +75,14 @@ private fun dateKeyOf(ms: Long): String {
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** 缓存 Application 引用，便于在协程 lambda 中安全访问（避免父类私有属性跨作用域不可见）。 */
     private val appContext: Application = getApplication()
+    /** 手柄连接状态单一可信源（P1-1）：由 GamepadDetector 热插拔流驱动，供全工程统一读取，消除 Theme 内独立 collect 的时序空洞。 */
+    private val _gamepadConnected = MutableStateFlow(GamepadDetector.isGamepadConnected())
+    val gamepadConnected: StateFlow<Boolean> = _gamepadConnected.asStateFlow()
+    init {
+        viewModelScope.launch {
+            GamepadDetector.gamepadConnectedFlow(appContext).collect { _gamepadConnected.value = it }
+        }
+    }
     private val repository = AppRepository(application)
     private val recentsRepo = RecentsRepository(application)
     /** 分类映射覆盖仓库：AI 回灌的「包名→分类」。装配阶段覆盖系统原始分类。 */
@@ -100,7 +115,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _focusedPackage = MutableStateFlow<String?>(null)
     val focusedPackage: StateFlow<String?> = _focusedPackage.asStateFlow()
 
-    private val _events = MutableSharedFlow<GamepadEvent>(replay = 1, extraBufferCapacity = 64)
+    // 审计 SEC-3：去除 replay=1 —— 否则配置变更/重组重建订阅时会重放最后一条事件
+    // （若为 Select/Trigger 会误启动应用/误切 Tab）。溢出时丢最旧事件，tryEmit 永不失败。
+    private val _events = MutableSharedFlow<GamepadEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
+    )
     val events: SharedFlow<GamepadEvent> = _events.asSharedFlow()
 
     /** 搜索页是否处于「搜索模式」（即当前 Tab = SEARCH）。Activity 据此决定是否接管导航键。 */
@@ -119,6 +139,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      *   INPUT → false（禁用手柄导航，让位 IME 光标移动）；
      *   LIST  → true（启用左摇杆穿透列表）。
      */
+    // 默认 INPUT：进入搜索页时焦点落在搜索输入框并弹出软键盘，便于直接输入。
+    // 用户可推左摇杆/方向键任意方向进入 LIST（结果列表），或按 Y 在 INPUT ⇄ LIST 间切换；
+    // Y 在搜索页只负责输入框，绝不收藏。
     private val _searchFocusTarget = MutableStateFlow(SearchFocusTarget.INPUT)
     val searchFocusTarget: StateFlow<SearchFocusTarget> = _searchFocusTarget.asStateFlow()
 
@@ -213,6 +236,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _launching = MutableStateFlow(false)
     val launching: StateFlow<Boolean> = _launching.asStateFlow()
 
+    /**
+     * 启动后退出信号：当设置「启动游戏后不保留 Reverie 进程」开启且本次启动成功时发射，
+     * 由 MainActivity 收集并 finishAndRemoveTask() 销毁 Reverie 任务（不保留后台）。
+     */
+    private val _exitAfterLaunch = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val exitAfterLaunch: SharedFlow<Unit> = _exitAfterLaunch.asSharedFlow()
+
     /** 应用列表扫描中标志（C7-5，设置"重新扫描"期间置 true）。 */
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -251,8 +281,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _weeklyUsageMap = MutableStateFlow<Map<String, Long>>(emptyMap())
     val weeklyUsageMap: StateFlow<Map<String, Long>> = _weeklyUsageMap.asStateFlow()
 
-    /** 上次 refreshReports() 同步时刻，用于进入统计页时的时间闸门节流（R13）。 */
+    /** 上次 refreshReports() 同步时刻，用于进入统计页时的时间闸门节流（R13）。@Volatile 保证 IO 协程写入对主线程可见。 */
+    @Volatile
     private var lastReportSyncMs: Long = 0L
+
+    /** 同步进行中守卫：防止统计页快速反复进入触发并发 sync 重复扫描系统事件。 */
+    private val reportSyncInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 报表数据版本号：每次后台 sync 完成后自增，UI 以其为 remember key 触发重读。 */
+    private val _reportsVersion = MutableStateFlow(0)
+    val reportsVersion: StateFlow<Int> = _reportsVersion.asStateFlow()
 
     /** 各分类 Tab 的应用数量（R11-4），与 UI 分类 Tab 顺序一致，供角标展示。 */
     private val _categoryCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
@@ -290,16 +328,27 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _weeklyUsageMap.value = emptyMap()
             return
         }
-        // 增量同步（首装会回看 30 天）
-        usageStatsRepo.sync()
+        // 并发守卫：已有同步在跑则直接返回（StateFlow 更新后 UI 自会刷新）
+        if (!reportSyncInFlight.compareAndSet(false, true)) return
         lastReportSyncMs = System.currentTimeMillis()
-        _dailyReport.value = usageStatsRepo.getDaily()
-        _weeklyReport.value = usageStatsRepo.getWeekly()
-        _monthlyReport.value = usageStatsRepo.getMonthly()
-        _yearlyReport.value = usageStatsRepo.getYearly()
-        // 预聚合 Map：今日直接复用缓存；本周一次性 aggregateFrom 后按包名建索引
-        _todayUsageMap.value = usageStatsRepo.getTodayMap()
-        _weeklyUsageMap.value = usageStatsRepo.getWeekly().associate { it.packageName to it.ms }
+        // 增量同步（首装会回看 30 天）。sync 内部 queryEvents 为重 IO，
+        // 移至 IO 线程执行，消除进入统计页时的主线程卡顿 / ANR 风险。
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                usageStatsRepo.sync()
+                _dailyReport.value = usageStatsRepo.getDaily()
+                _weeklyReport.value = usageStatsRepo.getWeekly()
+                _monthlyReport.value = usageStatsRepo.getMonthly()
+                _yearlyReport.value = usageStatsRepo.getYearly()
+                // 预聚合 Map：今日直接复用缓存；本周一次性 aggregateFrom 后按包名建索引
+                _todayUsageMap.value = usageStatsRepo.getTodayMap()
+                _weeklyUsageMap.value = usageStatsRepo.getWeekly().associate { it.packageName to it.ms }
+                // 版本号自增：通知统计页以新数据为 key 重读周期报表
+                _reportsVersion.value = _reportsVersion.value + 1
+            } finally {
+                reportSyncInFlight.set(false)
+            }
+        }
     }
 
     /**
@@ -321,6 +370,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     // ── 统计页专用 API（Tai 风格：今日小时柱状图 + 周期概览） ─────────────
     /** 今日 24 小时分布（事件级粒度），索引即小时。 */
     fun hourlyToday(): LongArray = usageStatsRepo.getHourly()
+    /** 今日逐小时启动次数（foreground 事件数，按小时统计）。 */
+    fun hourlyCountToday(): IntArray = usageStatsRepo.getHourlyCounts()
+    /** 今日逐小时各应用明细（时长ms, 启动次数），索引即小时。 */
+    fun hourlyAppBreakdownToday(): Array<Map<String, Pair<Long, Int>>> = usageStatsRepo.getHourlyAppBreakdown()
+    /** 某天（dateMs）内游玩时长 Top3 应用包名。 */
+    fun dayAppTop(dateMs: Long): List<String> =
+        usageStatsRepo.getDailyFor(dateKeyOf(dateMs)).take(3).map { it.packageName }
+    /** 某月（monthStartMs 所在月）内游玩时长 Top3 应用包名。 */
+    fun monthAppTop(monthMs: Long): List<String> = usageStatsRepo.getMonthTopApps(monthMs, 3)
 
     /** 最近 7 天每天总时长（ms），按日期升序（索引 0 = 6 天前，6 = 今天）。 */
     fun last7DaysTotal(): LongArray = usageStatsRepo.getDaySeries(7)
@@ -345,23 +403,71 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      *   且**不再追加**聚合项"系统应用"。这样用户关闭显示系统应用后，
      *   排行中完全看不见系统相关的条目，指标卡中的"应用量"也只统计用户应用。
      */
+    /**
+     * 系统应用隔离：关闭系统应用时，将所有系统应用外观聚合成一个【系统应用】项并置底。
+     * 注意：仅做外观聚合，绝不合并各系统应用底层数据（时长/次数仍按应用独立持久化）。
+     */
     fun collapseSystemApps(report: List<UsageStatsRepository.UsageEntry>): List<UsageStatsRepository.UsageEntry> {
         if (settings.showSystemApps) return report
         val sysPkgs = _systemPackages.value
         if (sysPkgs.isEmpty()) return report
-        return report.filter { it.packageName !in sysPkgs }
+        val userEntries = report.filter { it.packageName !in sysPkgs }
+        val sysEntries = report.filter { it.packageName in sysPkgs }
+        if (sysEntries.isEmpty()) return userEntries
+        val sumMs = sysEntries.sumOf { it.ms }
+        val sumCount = sysEntries.sumOf { it.count }
+        val aggregated = UsageStatsRepository.UsageEntry(SYSTEM_AGGREGATE_PKG, sumMs, sumCount)
+        return userEntries + aggregated
     }
 
-    /** 按周期 + 锚点日返回图表用的"逐日时长序列"（ms）。 */
+    /** 按周期 + 锚点日返回图表用的"逐日/逐月时长序列"（ms），对齐到所选自然周期。 */
     fun daySeriesFor(period: StatsPeriod, anchorMs: Long): LongArray = when (period) {
         StatsPeriod.DAILY -> usageStatsRepo.getDaySeries(7, anchorMs)
-        StatsPeriod.WEEKLY -> usageStatsRepo.getDaySeries(7, anchorMs)
-        StatsPeriod.MONTHLY -> usageStatsRepo.getDaySeries(30, anchorMs)
-        StatsPeriod.YEARLY -> LongArray(12) { idx ->
-            // 当年 12 个月每月总时长粗略拟合（历史无更细聚合）
-            usageStatsRepo.getYearlyFor(anchorMs).sumOf { it.ms } / 12
-        }
+        StatsPeriod.WEEKLY -> usageStatsRepo.getDaySeriesInWeek(anchorMs)
+        StatsPeriod.MONTHLY -> usageStatsRepo.getDaySeriesInMonth(anchorMs)
+        StatsPeriod.YEARLY -> usageStatsRepo.getMonthSeriesInYear(anchorMs)
     }
+
+    /** 按周期 + 锚点日返回图表用的"逐日/逐月启动次数序列"，与 [daySeriesFor] 一一对应。 */
+    fun dayCountSeriesFor(period: StatsPeriod, anchorMs: Long): IntArray = when (period) {
+        StatsPeriod.DAILY -> usageStatsRepo.getDayCountSeries(7, anchorMs)
+        StatsPeriod.WEEKLY -> usageStatsRepo.getDayCountSeriesInWeek(anchorMs)
+        StatsPeriod.MONTHLY -> usageStatsRepo.getDayCountSeriesInMonth(anchorMs)
+        StatsPeriod.YEARLY -> usageStatsRepo.getMonthCountSeriesInYear(anchorMs)
+    }
+
+    /** 最近 [n] 天（含锚点当天）每天总时长列表，按日期倒序（最新在最上）。供统计页每日列表。 */
+    fun dailyUsageList(n: Int, anchorMs: Long = System.currentTimeMillis()): List<Pair<Long, Long>> =
+        usageStatsRepo.getDailyUsageList(n, anchorMs)
+
+    /** 最近 [n] 天（含锚点当天）每天总启动次数列表，按日期倒序。供统计页每日列表（次数模式）。 */
+    fun dailyCountList(n: Int, anchorMs: Long = System.currentTimeMillis()): List<Pair<Long, Int>> =
+        usageStatsRepo.getDailyCountList(n, anchorMs)
+
+    /** 最近 [n] 个月（含锚点当月）每月总时长列表，按月份倒序（最新在最上）。供统计页（年视图）列表。 */
+    fun monthlyUsageList(n: Int, anchorMs: Long = System.currentTimeMillis()): List<Pair<Long, Long>> =
+        usageStatsRepo.getMonthlyUsageList(n, anchorMs)
+
+    /** 自然周逐日 (dateMs, ms) 列表（升序），供统计页（周视图）列表。 */
+    fun weekDailyList(anchorMs: Long) = usageStatsRepo.getWeekDailyList(anchorMs)
+
+    /** 自然周逐日 (dateMs, count) 列表（升序），供统计页（周视图）列表（次数模式）。 */
+    fun weekDailyCountList(anchorMs: Long) = usageStatsRepo.getWeekDailyCountList(anchorMs)
+
+    /** 自然月逐日 (dateMs, ms) 列表（升序），供统计页（月视图）列表。 */
+    fun monthDailyList(anchorMs: Long) = usageStatsRepo.getMonthDailyList(anchorMs)
+
+    /** 自然月逐日 (dateMs, count) 列表（升序），供统计页（月视图）列表（次数模式）。 */
+    fun monthDailyCountList(anchorMs: Long) = usageStatsRepo.getMonthDailyCountList(anchorMs)
+
+    /** 自然年逐月 (monthMs, ms) 列表（升序），供统计页（年视图）列表。 */
+    fun yearMonthlyList(anchorMs: Long) = usageStatsRepo.getYearMonthlyList(anchorMs)
+
+    /** 自然年逐月 (monthMs, count) 列表（升序），供统计页（年视图）列表（次数模式）。 */
+    fun yearMonthlyCountList(anchorMs: Long) = usageStatsRepo.getYearMonthlyCountList(anchorMs)
+
+    /** 某天逐小时明细（时长/次数/每应用），过往日命中持久化快照，今日回退实时缓存。 */
+    fun hourlyForDate(dateKey: String): UsageStatsRepository.HourlyDetail = usageStatsRepo.getHourlyForDate(dateKey)
 
     /** 当前锚点日是否为"今天"（决定 DAILY 视图是否绘制按小时柱状图）。 */
     fun isAnchorToday(anchorMs: Long): Boolean =
@@ -418,7 +524,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private fun debouncedRefresh() {
         rescanJob?.cancel()
         rescanJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(400)
+            kotlinx.coroutines.delay(400.milliseconds)
             refresh()
         }
     }
@@ -531,7 +637,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         // 超时保护（R14）：如果 refresh() 阶段二协程异常/被取消永久不返回，
         // 最多 12 秒后强制就绪，避免用户永远卡在开屏。
         viewModelScope.launch {
-            kotlinx.coroutines.delay(12_000)
+            kotlinx.coroutines.delay(12.seconds)
             forceReady()
         }
         // registerCallback 需要 QUERY_ALL_PACKAGES，未授权会抛 SecurityException，
@@ -577,44 +683,50 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _isScanning.value = true
         _queryAllGranted.value = isQueryAllPackagesGranted(appContext)
 
-        // 阶段一：快速启动路径。优先加载磁盘缓存（不含图标），
-        // 让 UI 立即渲染占位列表并退出开屏动画，后台并行刷新真实数据。
-        // R14：缓存加载移至 IO 协程，避免主线程因大缓存文件阻塞
-        val cached = AppCache.load(appContext)
-        if (cached != null && _apps.value.isEmpty()) {
-            // 从缓存重建轻量 AppModel（占位图标 + 零使用时长）
-            val overrides = categoryOverrides.overrides.value
-            val todayMap = usageStatsRepo.getTodayMap()
-            val placeholderApps = cached.map { c ->
-                AppModel(
-                    packageName = c.packageName,
-                    className = c.className,
-                    label = c.label,
-                    icon = placeholderIcon(),
-                    isGame = c.isGame,
-                    category = c.category,
-                    categoryText = overrides[c.packageName] ?: categoryLabel(c.category),
-                    firstInstallTime = c.firstInstallTime,
-                    installed = c.installed,
-                    lastUsedTime = c.lastUsedTime,
-                    versionName = c.versionName,
-                    todayUsage = todayMap[c.packageName] ?: 0L
-                )
-            }
-            _apps.value = sortApps(placeholderApps)
-            // 开屏保持可见（_isBooting 仍为 true），由阶段二完成后关闭。
-            // 用户优先看到开屏动画，而非灰色占位列表，体验更一致。
-
-            // R14：阶段一即预置焦点（基于缓存的活跃应用），避免列表渲染后无焦点项。
-            if (_focusedPackage.value == null && placeholderApps.isNotEmpty()) {
-                val cachedFocus = placeholderApps.firstOrNull { it.lastUsedTime > 0L }
-                    ?: placeholderApps.firstOrNull()
-                cachedFocus?.let { _focusedPackage.value = it.packageName }
-            }
-        }
-
-        // 阶段二：后台完整加载（真实图标 + 安装时间 + 最新数据），完成后替换并写回缓存
+        // 阶段一 + 阶段二统一在协程内串行执行：
+        // 阶段一读磁盘缓存移至 IO 线程（R14 真正落地，原实现仍在主线程），
+        // 且 runCatching 兜底——缓存文件损坏时跳过占位直接全量加载，不再让 ViewModel 构造崩溃。
         viewModelScope.launch {
+            // 阶段一：快速启动路径。优先加载磁盘缓存（不含图标），
+            // 让 UI 立即渲染占位列表并退出开屏动画，后台并行刷新真实数据。
+            val cached = runCatching { withContext(Dispatchers.IO) { AppCache.load(appContext) } }
+                .onFailure { Log.w("ReverieVM", "AppCache 读取失败，跳过占位阶段: ${it.message}") }
+                .getOrNull()
+            if (cached != null && _apps.value.isEmpty()) {
+                // 从缓存重建轻量 AppModel（共享占位图标 + 零使用时长）；构建放 Default 线程
+                val placeholderApps = withContext(Dispatchers.Default) {
+                    val overrides = categoryOverrides.overrides.value
+                    val todayMap = usageStatsRepo.getTodayMap()
+                    cached.map { c ->
+                        AppModel(
+                            packageName = c.packageName,
+                            className = c.className,
+                            label = c.label,
+                            icon = placeholderIcon(),
+                            isGame = c.isGame,
+                            category = c.category,
+                            categoryText = overrides[c.packageName] ?: categoryLabel(c.category),
+                            firstInstallTime = c.firstInstallTime,
+                            installed = c.installed,
+                            lastUsedTime = c.lastUsedTime,
+                            versionName = c.versionName,
+                            todayUsage = todayMap[c.packageName] ?: 0L
+                        )
+                    }
+                }
+                _apps.value = sortApps(placeholderApps)
+                // 开屏保持可见（_isBooting 仍为 true），由阶段二完成后关闭。
+                // 用户优先看到开屏动画，而非灰色占位列表，体验更一致。
+
+                // R14：阶段一即预置焦点（基于缓存的活跃应用），避免列表渲染后无焦点项。
+                if (_focusedPackage.value == null && placeholderApps.isNotEmpty()) {
+                    val cachedFocus = placeholderApps.firstOrNull { it.lastUsedTime > 0L }
+                        ?: placeholderApps.firstOrNull()
+                    cachedFocus?.let { _focusedPackage.value = it.packageName }
+                }
+            }
+
+            // 阶段二：后台完整加载（真实图标 + 安装时间 + 最新数据），完成后替换并写回缓存
             try {
                 val oldApps = _apps.value
                 // 一次枚举所有应用（含系统），分别提取
@@ -799,7 +911,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun currentVisibleList(): List<AppModel> = computeVisibleList()
 
     /** 缓存恢复时复用同一张占位图标，避免为每个 App 各建一张 Bitmap。 */
-    private val sharedPlaceholder: ImageBitmap by lazy { placeholderIcon() }
 
     /** 精选包名集合 = 白名单 ∪ 用户收藏。 */
     private fun featuredPackages(): Set<String> =
@@ -821,28 +932,39 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _featured.value = priority
     }
 
-    private fun placeholder(packageName: String): AppModel {
-        val name = packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
-        return AppModel(
-            packageName = packageName,
-            className = "",
-            label = "$name（未安装）",
-            icon = placeholderIcon(),
-            isGame = true,
-            installed = false
-        )
-    }
 
-    /** 生成灰色占位图标（未安装的白名单包名，48×48 的 Bitmap 内存可忽略）。 */
-    private fun placeholderIcon(): ImageBitmap {
+
+    /** 共享灰色占位图标（懒加载单例）：阶段一为每个应用建 AppModel 时复用同一张，N 应用不再产生 N 张位图。 */
+    private val sharedPlaceholderIcon: ImageBitmap by lazy {
         val size = 48
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         Canvas(bmp).drawColor(PLACEHOLDER_ICON_COLOR)
         // ⚠️ asImageBitmap() 直接包装同一 Bitmap，不可 recycle（N1）
-        return bmp.asImageBitmap()
+        bmp.asImageBitmap()
     }
 
+    private fun placeholderIcon(): ImageBitmap = sharedPlaceholderIcon
+
     fun pushEvent(event: GamepadEvent) {
+        _events.tryEmit(event)
+    }
+
+    /**
+     * 手柄事件入口（仅 [cn.mocabolka.run.gamepad.GamepadManager] 调用）。
+     *
+     * 任一经过 [cn.mocabolka.run.gamepad.GamepadManager.isTrustedGamepadDevice] 验证的真手柄事件，
+     * 都证明手柄当前在线，应立刻点亮 [gamepadConnected]（即 [cn.mocabolka.run.ui.theme.LocalShowFocusIndicators]），
+     * 使焦点框（[cn.mocabolka.run.ui.theme.focusBorder] / AppTile / AppListItem 的选中描边）显示。
+     *
+     * 之所以需要这层驱动：单一可信源 [gamepadConnected] 目前同时由 [cn.mocabolka.run.gamepad.GamepadDetector]
+     * 的热插拔广播流喂养。若该广播未及时触发或漏报（典型场景：应用启动后手柄才接入），
+     * 广播流不会更新，[gamepadConnected] 会一直停在初始值 false，于是「左摇杆能正常导航、A 能进应用、
+     * 但焦点框不显示」——逻辑全通，唯独 UI 焦点框缺失。
+     * 任一手柄事件本身即是最可靠的设备在线证据，凭真实事件点亮可彻底消除该死区。
+     * 断开复位仍由 GamepadDetector 流负责（设备移除时广播置 false）。
+     */
+    fun pushGamepadEvent(event: GamepadEvent) {
+        if (!_gamepadConnected.value) _gamepadConnected.value = true
         _events.tryEmit(event)
     }
 
@@ -965,9 +1087,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val q = _query.value
         val cat = _selectedCategory.value
         val filtered = _apps.value.filter {
-            (q.isBlank() || it.label.contains(q, ignoreCase = true) ||
-                it.packageName.contains(q, ignoreCase = true) ||
-                it.categoryText.contains(q, ignoreCase = true)) &&
+            (q.isBlank() || it.matchesSearch(q)) &&
                 (cat == "全部" || cat == "精选" || cat == "最近" || cat == "收藏" ||
                     it.categoryText == cat)
         }
@@ -997,11 +1117,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun moveInSearchList(step: Int) {
         val q = _query.value
-        val list = _apps.value.filter {
-            q.isBlank() || it.label.contains(q, ignoreCase = true) ||
-                it.packageName.contains(q, ignoreCase = true) ||
-                it.categoryText.contains(q, ignoreCase = true)
-        }
+        val list = _apps.value.filter { q.isBlank() || it.matchesSearch(q) }
         if (list.isEmpty()) return
         val idx = list.indexOfFirst { it.packageName == _focusedPackage.value }
             .let { if (it < 0) 0 else it }
@@ -1113,13 +1229,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // 启动成功：短暂保留遮罩，随后由目标应用接管界面；若失败停留则自动解除
             // R11-6：增加 3s 超时兜底，防止目标应用未正确接管导致遮罩卡死
             viewModelScope.launch {
-                kotlinx.coroutines.delay(400)
+                kotlinx.coroutines.delay(400.milliseconds)
                 _launching.value = false
             }
             viewModelScope.launch {
-                kotlinx.coroutines.delay(3000)
+                kotlinx.coroutines.delay(3.seconds)
                 if (_launching.value) _launching.value = false
             }
+            // 行为设置：启动后不保留 Reverie 进程 —— 发射退出信号让主页销毁本任务
+            if (settings.killAfterLaunch) _exitAfterLaunch.tryEmit(Unit)
         }
     }
 
@@ -1155,6 +1273,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshQueryAllPermission() {
         _queryAllGranted.value = isQueryAllPackagesGranted(appContext)
     }
+
+    /** 某应用的历史累计游玩时长（ms），来自 UsageStats 聚合；未授权/无记录返回 0。 */
+    fun totalPlayMs(packageName: String): Long = usageStatsRepo.getTotal(packageName)
 
     /** 打开 Reverie 的应用信息页，用户可手动授予"应用列表权限访问"。 */
     fun openAppInfoForPermission() {

@@ -15,9 +15,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -62,6 +63,22 @@ object MotionSpec {
     val TabFade = tween<Float>(durationMillis = 140, easing = FastOutSlowInEasing)
     /** Tab 切换 slide 时长：从 320ms 缩到 180ms，避免旧 tab 长时间驻留导致双列表重绘。 */
     val TabSlideOffset = tween<IntOffset>(durationMillis = 180, easing = FastOutSlowInEasing)
+
+    // ── 背景切换专用（游戏页背景图 Crossfade）──
+    /** 背景图 Crossfade 时长：380ms，比通用 [TabFade]（140ms）更长，消解背景硬切的视觉割裂。 */
+    val BackgroundCrossfade = tween<Float>(durationMillis = 380, easing = EaseInOut)
+
+    // ── Widget 渐显专用（个性化面板 Widget 加载 / 内容切换）──
+    /** Widget 渐入渐出时长：300ms（EaseInOut），消解「加载转圈 → Widget 突现 / 切游戏复用」的硬切感。 */
+    val WidgetFade = tween<Float>(durationMillis = 300, easing = EaseInOut)
+
+    // ── 整页切换专用（切游戏）：横向滑动 + 淡入淡出之上的纵深缩放 ──
+    /** 整页切换缩放时长，与 [SlideOffset] 同族（320ms，纵深感）。 */
+    val PageScale = tween<Float>(durationMillis = 320, easing = FastOutSlowInEasing)
+    /** 整页切换进入起始缩放（0.94→1：旧页退场、新页浮出）。 */
+    const val PageEnterScale = 0.94f
+    /** 整页切换退场目标缩放（1→0.94）。 */
+    const val PageExitScale = 0.94f
 
     // ── 弹簧（焦点缩放 / 角标弹跳）──
     /** 焦点态缩放弹簧：中等刚度 + 中等回弹（全组件统一手感）。 */
@@ -173,13 +190,14 @@ fun AnimatedNumberText(
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = MaterialTheme.colorScheme.onSurface,
-    /** 计数时长（ms），默认 600 并受 [reduceMotion] 守卫。 */
-    durationMs: Int = 600,
     reduceMotion: Boolean = false
 ) {
+    // 数字波动动画：计时规格统一走全局动画机 [MotionMachines.numberFluctuation]，
+    // 不再硬编码 tween(600, FastOutSlowInEasing)。统计页「使用时长/启动次数」切换、
+    // 日周月年周期切换均经此获得一致计数缓动，且不触发组件树重载。
     val f by animateFloatAsState(
-        targetValue = if (reduceMotion) value.toFloat() else value.toFloat(),
-        animationSpec = if (reduceMotion) tween(0) else tween(durationMs, easing = FastOutSlowInEasing),
+        targetValue = value.toFloat(),
+        animationSpec = MotionMachines.numberFluctuation(reduceMotion),
         label = "numCount"
     )
     androidx.compose.material3.Text(
@@ -193,8 +211,43 @@ fun AnimatedNumberText(
 }
 
 /**
- * 玻璃拟态修饰：给元素叠加轻微模糊+降低不透明度，模拟磨砂玻璃质感。
+ * 玻璃拟态修饰（磨砂模糊层）：对**本图层内容**施加高斯模糊。
+ *
+ * 重要方向性说明：Compose / Android 的模糊只能作用于图层**自身内容**
+ * （无 backdrop-blur API），因此该修饰符必须挂在**背景层**
+ * （如 HomeScreen 壁纸 Image）上，让被卡片覆盖的底图整体磨砂；
+ * 前景卡片只做 alpha 半透明 + [glassHighlight] 高光，两层叠加即为完整的
+ * iOS/macOS 风格磨砂玻璃链路。**严禁挂在含文字的前景容器上**（文字会被糊掉）。
+ *
+ * - 基于 [androidx.compose.ui.draw.blur]（GPU RenderEffect，minSdk=36 恒可用，无需版本守卫）。
+ * - [enabled]=false 时退化为无操作（零开销）。
+ */
+fun Modifier.frosted(enabled: Boolean, blurRadius: Dp = 18.dp): Modifier = this.then(
+    if (!enabled) Modifier
+    else Modifier.blur(blurRadius)
+)
+
+/**
+ * 玻璃高光修饰：在内容之上叠加「顶部光源反射」——白色渐变自顶向下衰减
+ * （0.12f → 0.04f → 透明，止于 40% 高度），模拟玻璃面板上缘受光。
+ * 与 [frosted]（挂背景层）配套构成磨砂玻璃质感；本修饰符挂**前景卡片**，
+ * 纯 draw 阶段叠加，不触发重组、不影响命中测试。
  * [enabled]=false 时退化为无操作（零开销）。
  */
-fun Modifier.frosted(enabled: Boolean, blurRadius: Dp = 18.dp): Modifier =
-    if (!enabled) this else this.then(Modifier.blur(blurRadius))
+fun Modifier.glassHighlight(enabled: Boolean): Modifier = this.then(
+    if (!enabled) Modifier
+    else Modifier.drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.12f),
+                    Color.White.copy(alpha = 0.04f),
+                    Color.Transparent
+                ),
+                startY = 0f,
+                endY = size.height * 0.4f
+            )
+        )
+    }
+)

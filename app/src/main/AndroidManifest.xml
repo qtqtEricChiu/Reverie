@@ -15,6 +15,11 @@
     <!-- 手柄触感反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- SteamDB 美术资源在线提取（WebView + okhttp 下载）所需 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 网络质量探测（弱网时延长探针兜底）：getActiveNetwork/getNetworkCapabilities 需要此权限，缺失会抛 SecurityException -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- 游戏手柄输入 -->
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -47,7 +52,7 @@
             android:screenOrientation="unspecified"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
             android:launchMode="singleTask"
-            android:stateNotNeeded="true"
+            android:alwaysRetainTaskState="true"
             android:excludeFromRecents="false"
             android:resumeWhilePausing="true"
             android:theme="@style/Theme.Launcher.Starting">
@@ -82,6 +87,51 @@
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
             android:theme="@style/Theme.Launcher"
             android:parentActivityName=".ui.AboutActivity" />
+
+        <!-- 游戏专属页面：独立 Activity（参考 Steam 大屏幕游戏库-游戏界面），仅主页进入 -->
+        <activity
+            android:name=".ui.game.GamePageActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".MainActivity" />
+
+        <!-- 游戏截图/录屏"查看全部"二级页面：独立 Activity，从 GamePage 进入 -->
+        <activity
+            android:name=".ui.game.GameScreenshotsAllActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".ui.game.GamePageActivity" />
+
+        <!-- 美术资源获取（L2，二级子页面）：SteamDB 提取 / 自定义主题的入口汇合 -->
+        <activity
+            android:name=".ui.game.steamart.ui.SteamArtHubActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".ui.game.GamePageActivity" />
+
+        <!-- SteamDB 美术资源提取（L3，三级子页面） -->
+        <activity
+            android:name=".ui.game.steamart.ui.SteamArtExtractActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".ui.game.steamart.ui.SteamArtHubActivity" />
+
+        <!-- 自定义主题（L3，三级子页面） -->
+        <activity
+            android:name=".ui.game.steamart.ui.SteamArtCustomActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher"
+            android:parentActivityName=".ui.game.steamart.ui.SteamArtHubActivity" />
 
 
 

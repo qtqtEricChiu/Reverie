@@ -66,21 +66,35 @@ object SurfaceTokens {
     // ── 卡片 / 表面 ───────────────────────────────────────────
     /**
      * 标准卡片表面：surfaceVariant 低 alpha，用于非聚焦态的卡片/行底色。
-     * [level] 提供三档统一强度，替代散落的 0.30 / 0.35 / 0.45 / 0.50。
+     * [level] 提供四档统一强度，替代散落的 0.22 / 0.30 / 0.35 / 0.45 / 0.50。
+     *  - Overlay = 0.22（玻璃穿透态专用：壁纸在卡片后可见时最透档）
      *  - Subtle = 0.30（图表卡、License 卡等弱背景）
      *  - Default = 0.45（MetricCard、SubPage 静态卡、AppListItem 等）
      *  - Strong = 0.50（需要时稍重）
      */
-    enum class CardLevel { Subtle, Default, Strong }
+    enum class CardLevel { Overlay, Subtle, Default, Strong }
 
     @Composable
     fun cardSurface(level: CardLevel = CardLevel.Default): Color {
         val a = when (level) {
+            CardLevel.Overlay -> 0.22f
             CardLevel.Subtle -> 0.30f
             CardLevel.Default -> 0.45f
             CardLevel.Strong -> 0.50f
         }
         return MaterialTheme.colorScheme.surfaceVariant.copy(alpha = a)
+    }
+
+    /**
+     * 玻璃感知卡片表面：读取 [LocalGlassEnabled]，玻璃开启时自动降级到
+     * [CardLevel.Subtle]（半透明，让壁纸磨砂底透出），关闭时按调用方给定
+     * [level] 取实色感表面 —— 调用方零传参即可跟随全局玻璃开关。
+     * 注意：焦点/按压等**状态语义**的 Strong 背景不应换用本函数（保持状态对比度）。
+     */
+    @Composable
+    fun cardSurfaceGlassAware(level: CardLevel = CardLevel.Default): Color {
+        val effective = if (LocalGlassEnabled.current) CardLevel.Subtle else level
+        return cardSurface(effective)
     }
 
     /**
@@ -143,12 +157,16 @@ object SurfaceTokens {
     fun restingBorderColorSoft(): Color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
 
     /**
-     * 玻璃拟态深色底（KeyBadge Glass / 浮块的统一底色）：固定黑色 0.6f。
+     * 玻璃拟态深色底（KeyBadge Glass / 浮块的统一底色）。
+     * 联动 [LocalGlassEnabled]：玻璃开启 = 黑色 0.6f（半透浮块）；
+     * 关闭 = 黑色 0.9f（近实色，退化为普通深色浮块）。
      * 此前 KeyBadge 两处硬编码 `Color.Black.copy(alpha = 0.6f)`，
      * 现归一化到此，改一处即全站键位浮块底色一致。
      */
     @Composable
-    fun glassBg(): Color = Color.Black.copy(alpha = 0.6f)
+    fun glassBg(): Color =
+        if (LocalGlassEnabled.current) Color.Black.copy(alpha = 0.6f)
+        else Color.Black.copy(alpha = 0.9f)
 
     /**
      * 图标按钮圆形 tonal 背景（ReverieIconButton tonal=true）：surfaceVariant + 0.6f。
@@ -184,19 +202,51 @@ fun SurfaceCard(
     content: @Composable BoxScope.() -> Unit
 ) {
     val radius = RoundedCornerShape(shape)
+    // 玻璃感知（R12）：SurfaceCard 的全部调用方均为静态内容卡（无焦点/按压状态语义），
+    // 统一走 cardSurfaceGlassAware——玻璃开时半透 + 顶部高光，关时按 level 实色感。
+    val glass = LocalGlassEnabled.current
     Box(
         modifier = modifier
             .clip(radius)
-            .background(SurfaceTokens.cardSurface(level))
+            .background(SurfaceTokens.cardSurfaceGlassAware(level))
             .then(
                 if (border) Modifier.border(
                     width = Dimens.FocusBorderWidth,
                     color = SurfaceTokens.restingBorderColor(),
                     shape = radius
                 ) else Modifier
-            ),
+            )
+            .glassHighlight(enabled = glass),
         content = content
     )
+}
+
+/**
+ * 玻璃感知卡片修饰符工厂：一行接入"圆角裁剪 + 玻璃感知表面 + 可选描边 + 玻璃高光"。
+ *
+ * 读取 [LocalGlassEnabled]：
+ *  - 玻璃开 → 表面自动降到 Subtle 半透（透出壁纸磨砂底）+ [glassHighlight] 顶部反光；
+ *  - 玻璃关 → 按 [level] 取实色感表面，无高光，与 [SurfaceCard] 视觉一致。
+ *
+ * 方向性说明：模糊由背景层（HomeScreen 壁纸）的 [frosted] 承担，本工厂**不含** frosted
+ * —— 挂在含文字的卡片上会把内容糊掉（Compose 无 backdrop-blur）。
+ *
+ * @param level 玻璃关闭时的表面强度
+ * @param shape 圆角形状（Dock 等异形圆角可传自定义 [RoundedCornerShape]），默认 [Dimens.lg] 全角
+ * @param border 可选描边（null = 无）
+ */
+@Composable
+fun Modifier.surfaceCardGlassAware(
+    level: SurfaceTokens.CardLevel = SurfaceTokens.CardLevel.Default,
+    shape: RoundedCornerShape = RoundedCornerShape(Dimens.lg),
+    border: androidx.compose.foundation.BorderStroke? = null
+): Modifier {
+    val glass = LocalGlassEnabled.current
+    return this
+        .clip(shape)
+        .background(SurfaceTokens.cardSurfaceGlassAware(level))
+        .then(if (border != null) Modifier.border(border, shape) else Modifier)
+        .glassHighlight(enabled = glass)
 }
 
 /**

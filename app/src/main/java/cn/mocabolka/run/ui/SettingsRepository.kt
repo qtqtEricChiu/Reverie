@@ -2,7 +2,6 @@ package cn.mocabolka.run.ui
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
 import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +16,8 @@ object CompatItem {
     const val OVERLAY = "overlay"
     const val USAGE = "usage"
     const val NOTIFICATION = "notification"
-    val ALL = listOf(BATTERY, AUTOSTART, OVERLAY, USAGE, NOTIFICATION)
+    const val SCREENSHOT = "screenshot"
+    val ALL = listOf(BATTERY, AUTOSTART, OVERLAY, USAGE, NOTIFICATION, SCREENSHOT)
 }
 
 class SettingsRepository(context: Context) {
@@ -54,6 +54,15 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString(KEY_LAST_FOCUSED, "") ?: ""
         set(value) = prefs.edit { putString(KEY_LAST_FOCUSED, value) }
 
+    /**
+     * 最后停留的主 Tab（HOME/STATS/SEARCH/SETTINGS 的枚举名）。
+     * 进程被系统回收后冷启动，HomeScreen 据此恢复到用户离开前的页面，
+     * 避免"回到应用又从首页重新进入"的割裂感。
+     */
+    var lastMainTab: String
+        get() = prefs.getString(KEY_LAST_MAIN_TAB, "") ?: ""
+        set(value) = prefs.edit { putString(KEY_LAST_MAIN_TAB, value) }
+
     /** 是否显示应用通知角标（C6-4，统一开关）。 */
     private val _showBadges = MutableStateFlow(prefs.getBoolean(KEY_SHOW_BADGES, true))
     val showBadgesFlow: StateFlow<Boolean> = _showBadges.asStateFlow()
@@ -63,6 +72,23 @@ class SettingsRepository(context: Context) {
             _showBadges.value = value
             prefs.edit { putBoolean(KEY_SHOW_BADGES, value) }
         }
+
+    /** 震动触感强度（默认弱 = 旧版单一"开启"档的行为）。 */
+    private val _hapticIntensityFlow = MutableStateFlow(
+        // 兼容旧版 boolean 键：开启->弱(=旧行为)，关闭->关闭；新键优先
+        runCatching { HapticIntensity.valueOf(prefs.getString(KEY_HAPTIC_INTENSITY, "") ?: "") }
+            .getOrNull()
+            ?: if (prefs.contains(KEY_HAPTICS))
+                if (prefs.getBoolean(KEY_HAPTICS, true)) HapticIntensity.WEAK else HapticIntensity.OFF
+            else HapticIntensity.WEAK
+    )
+
+    val hapticIntensity: StateFlow<HapticIntensity> get() = _hapticIntensityFlow
+
+    fun setHapticIntensity(value: HapticIntensity) {
+        _hapticIntensityFlow.value = value
+        prefs.edit { putString(KEY_HAPTIC_INTENSITY, value.name) }
+    }
 
     /** 是否已提示过 QUERY_ALL_PACKAGES 被撤销（P1-5）。 */
     var queryAllPackagesWarned: Boolean
@@ -194,6 +220,20 @@ class SettingsRepository(context: Context) {
         }
 
     /**
+     * 启动游戏/应用后不保留 Reverie 进程：开启后，从主页启动任意应用成功即销毁
+     * Reverie 任务（finishAndRemoveTask），不在后台保留，避免占用内存/最近任务。
+     * 默认关闭（保留进程，返回即恢复上次页面——配合 lastMainTab 冷启动恢复）。
+     */
+    private val _killAfterLaunch = MutableStateFlow(prefs.getBoolean(KEY_KILL_AFTER_LAUNCH, false))
+    val killAfterLaunchFlow: StateFlow<Boolean> = _killAfterLaunch.asStateFlow()
+    var killAfterLaunch: Boolean
+        get() = _killAfterLaunch.value
+        set(value) {
+            _killAfterLaunch.value = value
+            prefs.edit { putBoolean(KEY_KILL_AFTER_LAUNCH, value) }
+        }
+
+    /**
      * 实际生效的「减少动态效果」：直接返回 [reduceMotion]（节能模式已移除）。
      */
     val effectiveReduceMotion: Boolean get() = _reduceMotion.value
@@ -212,6 +252,7 @@ class SettingsRepository(context: Context) {
         prefs.edit {
             putInt(KEY_DARK_MODE, DarkMode.SYSTEM.ordinal)
             putBoolean(KEY_SHOW_BADGES, true)
+            putString(KEY_HAPTIC_INTENSITY, HapticIntensity.WEAK.name)
             putBoolean(KEY_USE_MONET, true)
             putString(KEY_ORIENTATION_MODE, defaultOrientationMode.value)
             putBoolean(KEY_WALLPAPER_BEHIND, false)
@@ -220,9 +261,11 @@ class SettingsRepository(context: Context) {
             putBoolean(KEY_DYNAMIC_BG, true)
             putBoolean(KEY_GLASS, true)
             putBoolean(KEY_REDUCE_MOTION, false)
+            putBoolean(KEY_KILL_AFTER_LAUNCH, false)
         }
         _darkMode.value = DarkMode.SYSTEM
         _showBadges.value = true
+        _hapticIntensityFlow.value = HapticIntensity.WEAK
         _useMonet.value = true
         _orientationMode.value = defaultOrientationMode
         _wallpaperBehind.value = false
@@ -230,6 +273,21 @@ class SettingsRepository(context: Context) {
         _dynamicBackground.value = true
         _glassSurface.value = true
         _reduceMotion.value = false
+        _killAfterLaunch.value = false
+    }
+
+    /**
+     * 游戏页 banner 选择记忆：默认 hero+logo（false），用户点击切到 header（true）后按包名长期保存。
+     * library hero+logo 的 logo 匹配机制偶尔会出问题，故开放给用户自行选择更顺眼的版式，
+     * 退出子页面 / 切换游戏后再回来仍保持上次选择。
+     */
+    fun isBannerHeader(pkg: String): Boolean =
+        prefs.getStringSet(KEY_BANNER_HEADER_PKGS, emptySet())?.contains(pkg) == true
+
+    fun setBannerHeader(pkg: String, header: Boolean) {
+        val set = prefs.getStringSet(KEY_BANNER_HEADER_PKGS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (header) set.add(pkg) else set.remove(pkg)
+        prefs.edit { putStringSet(KEY_BANNER_HEADER_PKGS, set) }
     }
 
     companion object {
@@ -237,8 +295,11 @@ class SettingsRepository(context: Context) {
         private const val KEY_DARK_MODE = "dark_mode"
         private const val KEY_PERMISSION_RATIONALE = "permission_rationale_shown"
         private const val KEY_LAST_FOCUSED = "last_focused"
+        private const val KEY_LAST_MAIN_TAB = "last_main_tab"
         private const val KEY_QUERY_ALL_PACKAGES_WARNED = "query_all_packages_warned"
         private const val KEY_SHOW_BADGES = "show_badges"
+        private const val KEY_HAPTICS = "haptics_enabled"
+        private const val KEY_HAPTIC_INTENSITY = "haptic_intensity"
         private const val KEY_COMPAT_DONE = "compat_done"
         private const val KEY_USE_MONET = "use_monet"
         private const val KEY_ORIENTATION_MODE = "orientation_mode"
@@ -248,5 +309,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_DYNAMIC_BG = "dynamic_background"
         private const val KEY_GLASS = "glass_surface"
         private const val KEY_REDUCE_MOTION = "reduce_motion"
+        private const val KEY_KILL_AFTER_LAUNCH = "kill_after_launch"
+        private const val KEY_BANNER_HEADER_PKGS = "banner_header_pkgs"
     }
 }

@@ -23,12 +23,29 @@ import kotlin.math.abs
  *   被用于「切换焦点栏」，这是全工程唯二的十字键绑定场景。
  * - 动作键（A/B/X/Y/LB/RB/Menu 等）始终被消费，由上层解释。
  */
-class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
+class GamepadManager(
+    /**
+     * 导航连发节奏（可按页面微调，见 [SubPageGamepadHost] 传入更平缓的子页节奏）：
+     * - [repeatIntervalMs] 首次推杆后到第一次重复的延迟；
+     * - [repeatFastAfterMs] 连续按住超过此时长后切换到"快速重复"；
+     * - [repeatFastIntervalMs] 快速重复间隔（越短焦点跳得越快）。
+     */
+    private val repeatIntervalMs: Long = DEFAULT_REPEAT_INTERVAL_MS,
+    private val repeatFastAfterMs: Long = DEFAULT_REPEAT_FAST_AFTER_MS,
+    private val repeatFastIntervalMs: Long = DEFAULT_REPEAT_FAST_INTERVAL_MS,
+    private val onEvent: (GamepadEvent) -> Unit,
+) {
+    companion object {
+        /** 主页面（多列网格）默认导航连发节奏：偏快跟手。 */
+        const val DEFAULT_REPEAT_INTERVAL_MS = 180L
+        const val DEFAULT_REPEAT_FAST_AFTER_MS = 600L
+        const val DEFAULT_REPEAT_FAST_INTERVAL_MS = 80L
+    }
 
-    /** 摇杆"起推"阈值：超过此值才判定为某方向（较高，防误触）。 */
-    private val stickDeadZone = 0.40f
-    /** 摇杆"回中"阈值：低于此值才判定为回中（较低，形成滞后区，抗抖动）。 */
-    private val stickReleaseZone = 0.28f
+    /** 摇杆"起推"阈值：超过此值才判定为某方向。下调至 0.24 消除轻推无反应体感死区（保留滞后区抗抖动）。 */
+    private val stickDeadZone = 0.24f
+    /** 摇杆"回中"阈值：低于此值才判定为回中（须 < deadZone 维持滞回）。 */
+    private val stickReleaseZone = 0.16f
     /** 十字键帽死区（保持原值，0.5）。 */
     private val hatDeadZone = 0.5f
 
@@ -50,14 +67,15 @@ class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
     var dialogActive = false
 
     /**
-     * 摇杆长按连续移动的重复间隔（ms）。两段式：
-     * - 首次推杆立即触发（delay = 0）
-     * - 后续按 [repeatIntervalMs] 节流，避免焦点乱跳
+     * 搜索页 INPUT 态「焦点贯通」开关：仅当搜索输入框获得焦点（searchFocusTarget==INPUT）时
+     * 由 MainActivity 置 true。此时 [navigationEnabled] 为 false（让位 IME 文本光标 / 软键盘导航），
+     * 但左摇杆任意方向均作为「从输入框无缝进入下方应用列表」的贯通手势被上层消费，
+     * 与 LIST 态一致（左摇杆在 INPUT/LIST 两态不冲突）；D-pad 仍走 onKeyEvent 路径让位 IME。
      */
-    private val repeatIntervalMs = 180L
-    /** 重复触发时的"加速"阈值：连续按住超过此时间后加快重复速率。 */
-    private val repeatFastAfterMs = 600L
-    private val repeatFastIntervalMs = 80L
+    @Volatile
+    var searchInputExitDown = false
+
+    // 导航连发节奏由构造函数参数（默认值见 companion 常量）提供，主页面保持原偏快节奏。
     /** 记录上一次重复触发的时间戳（用于节流判断）。 */
     @Volatile private var lastRepeatAt: Long = 0L
     @Volatile private var repeatStartedAt: Long = 0L
@@ -77,7 +95,7 @@ class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
     private val repeatRunnable = object : Runnable {
         override fun run() {
             val dir = lastAxisDir
-            if (dir != null && navigationEnabled) {
+            if (dir != null && (navigationEnabled || searchInputExitDown)) {
                 onEvent(GamepadEvent.Navigate(dir, lastAxisSource))
                 val now = android.os.SystemClock.uptimeMillis()
                 lastRepeatAt = now
@@ -89,9 +107,30 @@ class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
         }
     }
 
+    /**
+     * 安全校验（审计 SEC-1）：确认事件来自真实手柄/摇杆类物理设备。
+     * 拦截 Instrumentation / adb input / 恶意进程注入的伪造事件（deviceId=-1 虚拟设备），
+     * 防止未经物理输入即触发启动应用、切 Tab 等语义操作。
+     * 非可信来源不"吞掉"，而是放行给系统按普通按键处理（功能优雅降级）。
+     */
+    private fun isTrustedGamepadDevice(deviceId: Int): Boolean {
+        val dev = InputDevice.getDevice(deviceId) ?: return false
+        if (dev.isVirtual) return false // 虚拟键盘/注入设备一律不信任
+        val s = dev.sources
+        return (s and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+            (s and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK ||
+            (s and InputDevice.SOURCE_CLASS_JOYSTICK) != 0 ||
+            (s and InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD
+    }
+
     fun handleKeyEvent(event: KeyEvent): Boolean {
         if (passthrough) return false
         val keyCode = event.keyCode
+        // SEC-1：仅接管来自真实手柄设备的按键；注入/键盘等来源放行给系统，
+        // 不再被解释为手柄语义事件（防伪造触发敏感操作）。
+        if (XboxMapping.isHandledKey(keyCode) && !isTrustedGamepadDevice(event.deviceId)) {
+            return false
+        }
         // 十字键（D-pad）四向实体按键：ACTION_DOWN 和 ACTION_UP 均消费，
         // 防止孤立 UP 泄漏给系统（某些设备会把在 Compose 焦点边界"无处可去"
         // 的方向键 UP 解释为返回，导致连续按键退出应用）。
@@ -149,6 +188,8 @@ class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
                 (source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK ||
                 (source and InputDevice.SOURCE_CLASS_JOYSTICK) != 0
         if (!isGamepad) return false
+        // SEC-2：event.source 可被注入方伪造，追加真实 InputDevice 校验（同 SEC-1）。
+        if (!isTrustedGamepadDevice(event.deviceId)) return false
 
         val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
@@ -254,7 +295,11 @@ class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
             handler.removeCallbacks(repeatRunnable)
             // dialogActive 时导航始终发射（不检查 navigationEnabled），
             // 确保 dialog 内选项切换不受搜索页 INPUT 态影响。
-            val canNavigate = navigationEnabled || dialogActive
+            // 搜索 INPUT 态：左摇杆任意方向均作为「焦点贯通」手势放行（即便 navigationEnabled=false），
+            // 从输入框无缝进入下方列表（与 LIST 态一致，左摇杆在 INPUT/LIST 两态不冲突）；
+            // 仅 D-pad 仍让位 IME 文本光标（D-pad 走 onKeyEvent 路径，不受 searchInputExitDown 影响）。
+            val canNavigate = navigationEnabled || dialogActive ||
+                searchInputExitDown
             if (dir != null && canNavigate) {
                 val semantic = if (source == NavigateSource.DPAD) "跨栏允许" else "仅切分类(不跨栏)"
                 Log.d("ReverieGamepad", "axis navigate -> $dir source=$source [$semantic]")
@@ -271,6 +316,7 @@ class GamepadManager(private val onEvent: (GamepadEvent) -> Unit) {
     /** 释放资源（Activity 销毁时调用），避免泄漏主线程 Handler 回调。 */
     fun dispose() {
         handler.removeCallbacks(repeatRunnable)
+        handler.removeCallbacksAndMessages(null) // 兜底：清空一切残留回调，防 Activity 泄漏
         lastAxisDir = null
         lastRepeatAt = 0L
         repeatStartedAt = 0L

@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import cn.mocabolka.run.R
-import cn.mocabolka.run.ui.theme.Dimens
+import cn.mocabolka.run.gamepad.Direction
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 关于页面（全屏子页面）。
@@ -42,7 +42,11 @@ fun AboutPage(
     appVersion: String,
     listState: LazyListState = rememberLazyListState(),
     /** 右摇杆滚动后引擎回写的首个可视项索引（焦点跟随，见 SubPageScaffold）。 */
-    rightStickFirstVisible: androidx.compose.runtime.State<Int>? = null
+    rightStickFirstVisible: androidx.compose.runtime.State<Int>? = null,
+    /** 左摇杆 / Hat 导航流（焦点跟随，见 SubPageScaffold）。 */
+    navigate: Flow<Direction>? = null,
+    /** 减少动态效果（晕动症）：由宿主 Activity 透传，控制逐行入场动画。 */
+    reduceMotion: Boolean = false
 ) {
     val context = LocalContext.current
     val versionText = if (appVersion.isNotBlank()) "v$appVersion" else ""
@@ -97,6 +101,19 @@ fun AboutPage(
                 }
             }
         ),
+        // SteamDB 外部链接（游戏元数据 / 美术资源来源）
+        SubPageRow.Link(
+            key = "steamdb",
+            label = "SteamDB",
+            desc = "游戏元数据与美术资源来源 · steamdb.info",
+            onClick = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse("https://steamdb.info/"))
+                    )
+                }
+            }
+        ),
         SubPageRow.Static(key = "div2") {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         },
@@ -145,8 +162,10 @@ fun AboutPage(
         onBack = onBack,
         rows = rows,
         listState = listState,
-        rightStickFirstVisible = rightStickFirstVisible
-    )
+            rightStickFirstVisible = rightStickFirstVisible,
+            navigate = navigate,
+            reduceMotion = reduceMotion
+        )
 }
 
 @Composable

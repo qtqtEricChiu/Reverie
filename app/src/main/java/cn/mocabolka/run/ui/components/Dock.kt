@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import cn.mocabolka.run.launcher.AppModel
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.SurfaceTokens
+import cn.mocabolka.run.ui.theme.surfaceCardGlassAware
 
 @Composable
 fun Dock(
@@ -40,8 +41,12 @@ fun Dock(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = Dimens.lg, topEnd = Dimens.lg))
-            .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle))
+            // 玻璃感知卡片工厂：clip + 表面 + 高光一体（异形圆角经 shape 参数传入，
+            // 保证 clip 与 background 圆角一致）；玻璃关时退化为原 Subtle 实色感
+            .surfaceCardGlassAware(
+                level = SurfaceTokens.CardLevel.Subtle,
+                shape = RoundedCornerShape(topStart = Dimens.lg, topEnd = Dimens.lg)
+            )
             .padding(horizontal = Dimens.ScreenPadding, vertical = Dimens.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Dimens.md)

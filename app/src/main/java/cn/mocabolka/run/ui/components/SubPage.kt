@@ -1,6 +1,7 @@
 package cn.mocabolka.run.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -14,10 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.defaultMinSize
+
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,9 +54,9 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import cn.mocabolka.run.gamepad.GamepadDetector
+import cn.mocabolka.run.gamepad.Direction
+import kotlinx.coroutines.flow.Flow
 import cn.mocabolka.run.ui.components.Hint
-import cn.mocabolka.run.ui.components.HintBar
 import cn.mocabolka.run.ui.components.KeyBadge
 import cn.mocabolka.run.ui.components.KeyToken
 import cn.mocabolka.run.ui.components.ReverieFilledButton
@@ -60,7 +66,7 @@ import cn.mocabolka.run.ui.theme.LocalShowFocusIndicators
 import cn.mocabolka.run.ui.theme.focusBorder
 import cn.mocabolka.run.ui.theme.MotionSpec
 import cn.mocabolka.run.ui.theme.SurfaceTokens
-import cn.mocabolka.run.ui.theme.waterfallSafePadding
+import cn.mocabolka.run.ui.theme.edgeSafePadding
 
 /**
  * 统一二级/三级全屏子页面框架。
@@ -162,7 +168,19 @@ fun SubPageScaffold(
      * 值为 rows 的物理下标；本框架会将其映射到最近的可聚焦逻辑焦点行并同步 focusedRow。
      * 传 null（默认）表示未接入引擎，行为与旧版一致（仅方向键驱动焦点）。
      */
-    rightStickFirstVisible: State<Int>? = null
+    rightStickFirstVisible: State<Int>? = null,
+    /**
+     * 左摇杆 / Hat 导航事件流（可选）。由 Activity 的 [cn.mocabolka.run.gamepad.SubPageGamepad]
+     * 经 onNavigate 回调推入 [Direction.UP] / [Direction.DOWN]，本框架订阅后驱动焦点状态机上下移动，
+     * 修复真实手柄（左摇杆 / Hat 产生轴事件、Compose.onKeyEvent 收不到）无法移动焦点的问题。
+     * 传 null（默认）表示未接入，行为与旧版一致（仅方向键驱动焦点）。
+     */
+    navigate: Flow<Direction>? = null,
+    /**
+     * 减少动态效果（晕动症）：开启时逐行入场退化为瞬现，不做错峰滑入。
+     * 由宿主 Activity 从 [cn.mocabolka.run.ui.SettingsRepository.reduceMotion] 透传。
+     */
+    reduceMotion: Boolean = false
 ) {
     val focusableIndices = remember(rows) { rows.indices.filter { rows[it].focusable } }
     // 列表可聚焦行数；若存在 bottomAction 则焦点总数 +1（作为末项）。
@@ -197,22 +215,40 @@ fun SubPageScaffold(
             }
         }
     }
-    // 焦点框可见性：手柄未连接 / 纯触控模式下隐藏所有焦点框（含返回按钮）
-    val showFocus = LocalShowFocusIndicators.current
+    // 左摇杆 / Hat 导航（修复子菜单页手柄焦点无法交互）：
+    // SubPageGamepad 把左摇杆 / Hat 轴折算成 Direction 推入本流，这里驱动焦点状态机上下移动。
+    // 子页面为单列布局，仅处理 UP / DOWN；左右方向在本布局无意义，直接忽略。
     val context = androidx.compose.ui.platform.LocalContext.current
     // 左摇杆/方向键导航与确认的震动反馈（与主页一致：tick=移动、click=确认/返回）
     val haptics = remember { Haptics(context) }
+    if (navigate != null) {
+        LaunchedEffect(navigate) {
+            navigate.collect { dir ->
+                suppressAutoScroll = false // 左摇杆导航须正常滚动到焦点行
+                focusedRow = when (dir) {
+                    Direction.UP -> (focusedRow - 1).coerceAtLeast(0)
+                    Direction.DOWN -> (focusedRow + 1).coerceAtMost(lastRow)
+                    else -> focusedRow
+                }
+                // 左摇杆 / Hat 轴导航的 tick 反馈（与 D-pad 路径的 haptics.tick() 对齐，避免手柄左摇杆无声）
+                if (dir == Direction.UP || dir == Direction.DOWN) haptics.tick()
+            }
+        }
+    }
+    // 焦点框可见性：手柄未连接 / 纯触控模式下隐藏所有焦点框（含返回按钮）
+    val showFocus = LocalShowFocusIndicators.current
+    // 挖孔屏适配（与主页/游戏页统一）：读取 cutoutAdapt 开关，宽屏开启时内容加 displayCutout padding
+    // 绕开摄像头；关闭（全屏）时内容延伸到挖孔区。窗口层 cutout mode 已由 setupEdgeToEdgeImmersive 恒开。
+    val cutoutAdapt = remember { cn.mocabolka.run.ui.SettingsRepository(context).cutoutAdapt }
 
 
     Surface(
-        // 瀑布屏（曲面屏）安全边距**内建**到此框架根布局：先 fillMaxSize 占满全屏让 Surface
-        // 背景色铺到瀑布区两侧/底部（避免外层 windowBackground 透出造成"两侧无颜色"），
-        // 再 waterfallSafePadding 压缩内容区。
+        // 根 Surface 先 fillMaxSize 占满全屏（背景色铺到瀑布区两侧/底部，避免外层 windowBackground 透出造成色块割裂）；
+        // 内容层统一由 inner Column 的 edgeSafePadding(cutoutAdapt) 处理（仅左右，绝不碰上下）。
         // 竖屏生效（横屏两侧曲面已由系统状态栏/导航栏占据，Waterfall.kt 内部自动跳过），
         // 所有复用本框架的子页面（About/Licenses/CompatGuide）自动获得，无需各自调用方传 modifier。
         modifier = modifier
             .fillMaxSize()
-            .waterfallSafePadding()
             .onKeyEvent { ev ->
                 val n = ev.nativeKeyEvent
                 if (n.action != android.view.KeyEvent.ACTION_DOWN) return@onKeyEvent false
@@ -230,7 +266,7 @@ fun SubPageScaffold(
                     android.view.KeyEvent.KEYCODE_BUTTON_A -> {
                         if (focusedRow == 0) { onBack(); haptics.click() }
                         else if (useBottomAction && focusedRow == lastRow) {
-                            bottomAction!!.onClick(); haptics.click()
+                            bottomAction?.let { it.onClick(); haptics.click() } // 空安全替代 !!
                         } else {
                             val idx = focusableIndices.getOrNull(focusedRow - 1) ?: return@onKeyEvent true
                             when (val r = rows[idx]) {
@@ -271,18 +307,25 @@ fun SubPageScaffold(
             val rowDescStyle = MaterialTheme.typography.bodyMedium
             val bottomFocused = showFocus && useBottomAction && focusedRow == lastRow
 
+            // 系统栏避让（替代 Android 沉浸模式下系统未能自动完成的内容避让）：
+            // 仅上下、仅系统栏区域；用户要求状态栏内减约 12dp（所有界面统一），
+            // 故顶部只保留 (状态栏高 - 12dp)。左右由 edgeSafePadding 归一，此处不碰。
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = hPad, vertical = vPad)
+                    .statusBarSafeTop()
+                    .navigationBarsPadding()
+                    .edgeSafePadding(cutoutAdapt)
+                    // 顶部仅由状态栏内减避让（与主页/游戏页一致：标题栏贴边、不再额外下沉）；
+                    // 底部保留 vPad 给列表内容留出呼吸空间。
+                    .padding(start = hPad, end = hPad, bottom = vPad)
             ) {
-                SubPageTopBar(
+                SubPageTitleBar(
                     title = title,
                     onBack = onBack,
                     isBackFocused = showFocus && focusedRow == 0,
                     onBackFocus = { focusedRow = 0 },
-                    titleStyle = titleStyle,
-                    subTitleStyle = subTitleStyle
+                    titleStyle = titleStyle
                 )
 
                 Spacer(Modifier.height(Dimens.sm))
@@ -311,7 +354,7 @@ fun SubPageScaffold(
                     itemsIndexed(rows, key = { _, r -> r.key }) { index, row ->
                         val logical = focusableIndices.indexOf(index) // -1 表示不可聚焦
                         val isFocused = showFocus && logical >= 0 && focusedRow == logical + 1
-                        RowEnter(index = index) {
+                        RowEnter(index = index, reduceMotion = reduceMotion) {
                             when (row) {
                                 is SubPageRow.Link -> SubPageFocusableRow(
                                     label = row.label,
@@ -347,7 +390,7 @@ fun SubPageScaffold(
                                 } else {
                                     Surface(
                                         shape = MaterialTheme.shapes.medium,
-                                        color = SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle),
+                                        color = SurfaceTokens.cardSurfaceGlassAware(SurfaceTokens.CardLevel.Subtle),
                                         border = androidx.compose.foundation.BorderStroke(
                                             1.dp, SurfaceTokens.restingBorderColorSoft()
                                         ),
@@ -373,7 +416,9 @@ fun SubPageScaffold(
                 if (bottomBar != null) {
                     Spacer(Modifier.height(Dimens.sm))
                     bottomBar()
-                } else if (useBottomAction) {
+                } else if (useBottomAction && bottomAction != null) {
+                    // 局部捕获消除 !!：即使外部状态异变也不会 NPE
+                    val action = bottomAction
                     Spacer(Modifier.height(Dimens.sm))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -382,10 +427,10 @@ fun SubPageScaffold(
                         ReverieFilledButton(
                             onClick = {
                                 focusedRow = lastRow
-                                bottomAction!!.onClick()
+                                action.onClick()
                             },
                             focused = bottomFocused,
-                            text = bottomAction!!.label
+                            text = action.label
                         )
                     }
                 }
@@ -396,73 +441,29 @@ fun SubPageScaffold(
 
 /** 逐行入场动画：fadeIn + slideInVertically（错峰），符合 Material Design 列表入场规范。 */
 @Composable
-private fun RowEnter(index: Int, content: @Composable () -> Unit) {
+private fun RowEnter(index: Int, reduceMotion: Boolean = false, content: @Composable () -> Unit) {
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
+        // 减少动态效果时直接瞬现，跳过错峰滑入（晕动症友好）。
+        if (reduceMotion) {
+            shown = true
+            return@LaunchedEffect
+        }
         kotlinx.coroutines.delay(MotionSpec.staggerDelay(index))
         shown = true
     }
     val alpha by animateFloatAsState(
         targetValue = if (shown) 1f else 0f,
-        animationSpec = MotionSpec.Medium, label = "rowAlpha"
+        animationSpec = if (reduceMotion) tween(0) else MotionSpec.Medium, label = "rowAlpha"
     )
     val offsetY by animateFloatAsState(
         targetValue = if (shown) 0f else 24f,
-        animationSpec = MotionSpec.Medium, label = "rowOffset"
+        animationSpec = if (reduceMotion) tween(0) else MotionSpec.Medium, label = "rowOffset"
     )
     Box(Modifier.graphicsLayer { this.alpha = alpha; translationY = offsetY }) { content() }
 }
 
-/**
- * 统一标题栏：返回按钮（聚焦态主题色高亮）+ 标题 + 右侧"B 返回"键位提示。
- * 与 CompatGuide / About / Licenses 完全一致。
- */
-@Composable
-private fun SubPageTopBar(
-    title: String,
-    onBack: () -> Unit,
-    isBackFocused: Boolean,
-    onBackFocus: () -> Unit,
-    titleStyle: androidx.compose.ui.text.TextStyle,
-    subTitleStyle: androidx.compose.ui.text.TextStyle
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(
-                    if (isBackFocused) SurfaceTokens.focusBgStrong()
-                    else Color.Transparent
-                )
-                .clickable { onBackFocus(); onBack() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "返回",
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Spacer(Modifier.width(Dimens.sm))
-        Text(
-            title,
-            style = titleStyle,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Spacer(Modifier.weight(1f))
-        // 右侧键位提示：仅手柄连接时显示，统一使用 KeyBadge 风格（不暴露裸文本）。
-        GamepadHintBar(
-            modifier = Modifier.padding(end = Dimens.xs),
-            content = { Hint(KeyToken.B, "返回") }
-        )
-    }
-}
+
 
 /**
  * 统一可聚焦行：焦点态 = primary 边框 + 背景提升（兼容 CompatGuide 风格），
@@ -487,7 +488,8 @@ private fun SubPageFocusableRow(
     val bg = when {
         primary -> MaterialTheme.colorScheme.primary
         isFocused -> SurfaceTokens.focusBg()
-        else -> SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Default)
+        // 仅静息态玻璃感知；primary/焦点态保持状态对比度不降级
+        else -> SurfaceTokens.cardSurfaceGlassAware(SurfaceTokens.CardLevel.Default)
     }
     // 焦点框统一走 focusBorder 助手（手柄未连接时不绘制）；resting 边框保持 1dp 浅描边。
     val restingBorder = if (primary) null
@@ -567,7 +569,7 @@ private fun SubPageFocusableCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val bg = if (isFocused) MaterialTheme.colorScheme.primaryContainer
-    else SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle)
+    else SurfaceTokens.cardSurfaceGlassAware(SurfaceTokens.CardLevel.Subtle)
     // 焦点框统一走 focusBorder 助手；resting 边框保持 1dp 浅描边。
     val restingBorder = androidx.compose.foundation.BorderStroke(
         1.dp, SurfaceTokens.restingBorderColorSoft()

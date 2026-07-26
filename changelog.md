@@ -6,6 +6,146 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and the 
 
 ---
 
+## [1.1.0 (3)] — 2026-07-26
+
+**重大功能版本。** 自 1.0.0 以来最大一次演进：新增完整的**游戏详情页（GamePage）**、**SteamDB 美术提取系统**（Steam 库级 Hero / Logo 定位）、全站**玻璃拟态（Glassmorphism）**、归一化**动画机（MotionMachines）**、子页**手柄交互归一化**、以及**拼音搜索**。代码对照 Reverie 正式仓库（GitHub `v1.0.0` 基线）确认：新增 `ui/game/` 整包（GamePage 全家桶）、`ui/game/steamart/` 整包（SteamDB 提取链路）、`ui/theme/GlassState.kt` / `MotionMachines.kt`、组件 `BottomFadeMask` / `LayoutModifiers` / `ScrollProgressBar` / `SubPageKeyHandler`、工具 `util/Pinyin.kt`，并将 `gamepad/SubPageGamepad.kt` 重命名为 `SubPageGamepadHost.kt`。
+
+### 游戏详情页 GamePage（全新模块）
+- **活动与响应式骨架**：新增 `GamePageActivity` + `GamePage.kt` + `GamePageLayouts.kt`。`GamePageVariant` 由 `BoxWithConstraints` 约束推导 **6 档断点**（CompactPortrait / MediumPortrait / CompactLandscape / MediumLandscape / ExpandedLandscape 1200–1600 / ExtraLargeLandscape ≥1600 电视），分别套用 **PortraitBody / LandscapeBody** 两套骨架（07-15 横屏重构：旧 `Landscape2Body`/`Landscape3Body` 删除合并为 Steam 大屏式 `LandscapeBody` = 左 `GameLeftRail` 海报栏 + 右内容栏，LAND_2 右栏顶部 TabsRow、LAND_3 右栏顶部 Hero），横屏矮视口不再被全宽 Hero 吞掉垂直空间（根因 = 全宽 240~420dp Hero 大横幅在矮视口吞光垂直空间）。
+- **架构演进（07-14）**：GamePage 初版为 HomeScreen 内 `AnimatedVisibility` 覆盖层（`DialogLayer.GAME_PAGE` 事件路由），当日即按用户决策重构为**独立 Activity**（与 About/Licenses/CompatGuide 同构：沉浸全屏 + LandscapeTheme + 预测返回），移除 GAME_PAGE 事件分支。同日奠基 `GameArt.kt` 资源抽象：`ArtSource`(Asset/File/Remote) + `GameArtProvider`/`GameArtResolver` 聚合器**接口预留**——后续 SteamDB 提取的 `FileGameArtProvider` 零改动接入即受益于此设计。精选白名单包名更正（绝区零国服 `com.miHoYo.Nap`/国际服 `com.HoYoverse.ZenlessZoneZero`、无限暖暖真实包名）。
+- **焦点状态机**：`GPSlots` 扁平焦点索引（BACK / APP_INFO / FAVORITE / LAUNCH / TAB_DYNAMIC / TAB_STATS / TAB_ABOUT / CONTENT_START）驱动 `onKeyEvent`；↑↓ 栏内、←→ 跨栏（仅多列）、A 触发、B 返回、X 收藏、Y 在 TopBar⇄内容间跳、**LB/RB（L1/R1）循环切 Tab、LT/RT（L2/R2）切上/下一个游戏**（07-15 完成肩键语义对调，07-19 复核确认为最终版；LT/RT 浮块置于切游戏按钮两侧、LB/RB 浮块置于 Tab 滑块两侧，底部提示栏仅 A/B/X/Y 去重）。
+- **游戏判定 `isGameLike`（07-15）**：`app.isGame || categoryText=="游戏" || 白名单`——经本应用分类映射识别为「游戏」的应用（如鸣潮）同样进游戏页；`shouldOpenGamePage`/`buildInstalledGames` 单闸门共用。
+- **Tab 体系**：动态 / 统计 / 关于 三档（公告功能按用户决策全部移除，保持纯离线）。**功能范围决策（07-15）**：移除所有联网入口（成就 Play Games / 社区好友 / DLC / Saved Games / 多账号 / 内购），仅保留纯本地或系统 Intent 功能；卸载/强停合并进顶栏「应用信息」（`ACTION_APPLICATION_DETAILS_SETTINGS`），取消独立 ⋮ 菜单；截图聚合禁止任何联网图像识别。`GamePageTabs` 视觉对齐主页 `ReverieSegmentedRow`，仅手柄连接时（`GamepadVisible`）在滑块两侧放 LB/RB 键位浮块。
+- **动态 Tab**：媒体截图画廊（`ScreenshotGallery`，按截图文件名后缀哈希自动归类本游戏截图/录屏，SAF `ACTION_OPEN_DOCUMENT_TREE` 授权 + `ACTION_OPEN_DOCUMENT` 选样例持久化记忆，`DocumentsContract` 遍历无需 `androidx.documentfile`）+ 每日游玩时间线 `TimelineRow`（按 UsageStats 按日聚合，MD3 ListItem 重做）+ 时长趋势 `TrendSummary`。
+- **统计 Tab**：`TrendSummary`（总计 / 日均 / 最高 + 条形图），与主页统计独立。
+- **关于 Tab**：版本 / 首次安装 / 权限（PackageManager `GET_PERMISSIONS`）。
+- **第三方 Widget 宿主**：新增 `GameWidgetHost.kt`（`WidgetHostManager` / `WidgetHostSlot`），把社区 Widget 嵌入「个性化内容」区。`widgetHostPackagesForGame` 规则：米哈游/HoYoverse 系（含绝区零国服 `com.miHoYo.Nap`、国际服 `com.HoYoverse.ZenlessZoneZero`、原神等）→ 米游社 + TapTap 合并选择器；其它（无限暖暖、鸣潮等）→ 仅 TapTap。`PersonalizationWidgetPanel` 多 Provider 弹 `ModalBottomSheet`，单 Provider 直跳系统 Picker；Widget 贴边（`requiredWidth(整屏) + offset(-pad)` 突破外层 padding）。Widget 选择/绑定为**触控优先**，不进入手柄焦点链（规避 AndroidView 内嵌焦点冲突）。
+- **Widget 按游戏隔离（07-19，核心修复）**：原按「宿主包」匹配首个已绑 id 恢复，导致「无限暖暖的 TapTap」与「鸣潮的 TapTap」复用同一 `appWidgetId` 串扰。新增 `WidgetBindingStore`（SharedPreferences，键 `gamePkg|hostPkg → appWidgetId`）按游戏记录归属；`rebuildWidgetSlots` 只查当前游戏绑定并校验 provider 有效性（失效即 `removeWidget`+清 store）；`onWidgetBound` 捕获 `gamePkg` 局部值防异步竞态，「每游戏仅一个 Widget」清理只作用当前游戏。合并选择器为「多应用多 Provider」通用模型（多应用分节 + `N 款应用 · 共 M 个 Widget` 副标题），未来加 WeGame/BiliBili 等候选无需改 UI；`WidgetPickerSheet` 控高 60% 屏 + 半展开 + 可滚动 + 沉浸隐藏状态栏（`DialogWindowProvider` 取独立 window）。
+- **每日时间线与统计入口去冗余（07-15）**：GamePage 原 4 个入口落系统应用详情页（应用信息/游戏设置/两张统计卡），统计独立成 Tab 后收敛为 2 个；`StatRow`/`StatCardBig` 删除；「上次游玩显示 8 天前」根治（见修复合集）。切游戏候选 `buildInstalledGames`：白名单已装置顶、未安装不进循环、顶栏 `N/M` 序号。
+- **运行时取色**：`GameArt.extractAccent` 离线手写 HSV 直方图（96px 下采样、跳过 alpha<128/近灰/过暗/过亮、36 色相桶投票、按 s*v 加权、归一化 s∈[0.55,0.9] v∈[0.5,0.85]），取色图片优先级 logo→capsule→header→hero（logo 品牌纯色最佳），`LruCache` 缓存；accent 优先级 **游戏 art > Monet > BrandColors**，本页不随 Monet 覆盖。新增 `GamePageColors.onAccent(accent)`（按 luminance 自动黑/白字）+ `tonal(accent,alpha)`，全站按钮 accent 单色系隔离。
+- **UI/UX 十项审计整改（07-15，P0/P1/P2）**：Tab 选中 `accent.copy(0.20)` + `segmentContainer()` track；`WidgetPickerSheet` 标题白字改 `onSurface`（亮色主题可见）；`TimelineRow` 按 MD3 ListItem 重做（未游玩降透明无条形、游玩态 accent 8% track + 55% 细条）；`LaunchButton` 焦点框改 `onAccent(accent)`（黄钮黄框不可见根治）；「游戏截图」标题改 `onBackground` + 「N张」tonal chip；顶部 scrim 0.55→0.45；已绑 Widget 顶部 accent 10% 4dp「已个性化」信号条；截图缩略图圆角对齐 `shapes.medium`；未选中 Tab 聚焦加 accent 10% 底色信号。
+- **控件归一化审计落地（07-15）**：GamePage 全部原生 `IconButton`/`AssistChip`/`TextButton`/`Button` 替换为 `ReverieIconButton`/`ReverieFilledButton`/`ReverieTextButton`/`ReverieTonalButton`；Tab 视觉对齐主活动 `ReverieSegmentedRow`；焦点框统一 `focusBorder(focused, accent)` 助手；`Buttons.kt` 登记「全站 default primary，GamePage focusColor=accent 属已登记专属例外」。
+- **手柄导航横向贯通修复（07-15）**：TopBar RIGHT 从 FAVORITE 原 `coerceAtMost(FAVORITE)` 永远到不了 LAUNCH、LEFT 从 LAUNCH 不动——改为 返回/应用信息/收藏/启动 横向全贯通。
+- **Hero 严格不裁切**：Hero 图 `ContentScale=FillHeight`（高度锚定，绝不上下裁切）；`useOriginalRatioHero = isXL || LAND_3`。横屏 LAND_3 顶栏 Hero 200/240dp 封顶切换；`GameLeftRail` 海报 `min(capsuleWidth*1.5, availH*0.48)` 封顶永不溢出。
+- **切游戏动画**：`AnimatedContent` 按最短循环距离定方向；`gameDataCache[pkg]` + `preloadNeighbors` 相邻 2 预载；切换后焦点复位 LAUNCH、`loadGame` 原地重载，`currentPkg` 替代 `currentIndex` 跟踪（未安装不进切换循环，`buildInstalledGames` 走 `isGameLike`）。
+- **切游戏 0.2s 数据缺口根治（07-19）**：原「先渲染空壳再异步填充」——`AnimatedContent` 入场瞬间 `gameData=null`，收藏星/统计/时间线闪空后再跳变。改为**先取数后动画**：`gameDataCache` 命中即同步展示，未命中先在旧画面上台后加载、数据就绪才推进 `targetState`；新增 `GAME_SWITCH_THROTTLE_MS` 节流防连按穿透。
+- **挖孔/刘海适配下沉（07-19）**：竖屏 header 内容整体 `statusBarsPadding()` 下沉（Hero 图仍全屏延伸至状态栏后），返回钮/星标不再被挖孔遮挡；该模式后沉淀为 `LayoutModifiers.statusBarSafeTop`。
+- **竖屏 HeroBanner 滚动折叠（07-26，collapsing header）**：竖屏 PortraitBody 的 HeroBanner 与内容 LazyColumn 为兄弟节点，根 Column 挂 `nestedScroll` 跨兄弟传递滚动偏移；`Animatable(0f)` 持有 `collapsePx`，`onPreScroll` 下滑 `snapTo` 立即收窄、`onPostScroll` 判定「主体列表到顶」即 `animateTo(0f)` 弹回全高（切游戏按包名 key 归零）。logo 用全展开参考高度 `variant.heroHeight - 2*padV` 计算、空间不足才等比缩、点「果冻 spring」回弹；banner 本身 1:1 线性跟手无弹簧（动画机铁律下 `heroScrollCollapse` 因 `Animatable` 方案而删除、未散落新动画机）。竖屏点按游戏类一律 `openGamePage`，绝不进应用详情抽屉（结合 `portraitDrawerOpen=false` 防御）。
+- **预测返回统一**：根因 = 四个子 Activity 用旧式 `WindowCompat.setDecorFitsSystemWindows(false)` 未配置手势导航窗口，预测预览动画不出现（仅 `MainActivity` 的 `enableEdgeToEdge()` 生效）。新增 `ui/EdgeToEdge.kt` 的 `setupEdgeToEdgeImmersive()`（内部 `enableEdgeToEdge()` + 隐藏状态栏 `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`），About/Licenses/CompatGuide/GamePage 四个 Activity 改用之；MainActivity 二次确认气泡与预测预览共存（首滑预览不退出、二次确认才 finish）；预测返回一律用 `android.window.OnBackInvoked*` 平台类型（修正 `androidx.activity:activity:1.10.0` AAR 未暴露 `OnBackInvoked*` 的编译阻断）。
+- **左栏手柄焦点修复（07-20，根因修正）**：LAND_3 左栏摇杆/十字键失灵的真实根因 = `GameLeftRail` 根 `Column` 挂了 `verticalScroll(rememberScrollState())`，可滚动容器成为**真实焦点节点**吞掉 DPAD 事件、页面级 `onKeyEvent` 焦点状态机被绕过。修复 = 删除左栏 `verticalScroll`（左栏内容固定本就不应滚动），焦点全部回归 `GPSlots` 状态机。**铁律沉淀：焦点状态机页面内严禁再挂可滚动容器于焦点链上。**
+- **左栏视觉演进（07-19~07-20）**：海报卡右上角收藏星标浮层（金色 `FavoriteStar`）；启动按钮 accent 主色、游戏设置/应用信息降为 tonal；`GameLeftRail` 海报高度 `min(capsuleWidth*1.5, availH*0.48)` 封顶。
+- **页面级焦点跟随滚动修复（07-25）**：游戏页家族旧逻辑带「保守守卫」（完全移出视口才滚 / `firstVisibleItemIndex` 守卫）导致左摇杆焦点到哪页面不跟随、右摇杆正常。改为与 `SubPageScaffold` 同构——焦点一变即 `animateScrollToItem` / 带 `margin=90` 舒适带跟随。`ScreenshotGallery` 根加 `focusGroup` 标记（禁用 `focusable(true)` 抢根焦点），`LaunchedEffect(selectedShot)` 横向跟随滚动到「查看全部」磁贴。
+- **竖屏 HeroBanner 滚动折叠（完整演进）**：`GamePageBody` 根 Column 挂 `nestedScroll` 跨兄弟节点折叠（HeroBanner 与 LazyColumn 是兄弟节点、不在同一滚动容器）；折叠态由 `collapsePx`(mutableFloatState) 演进为 `Animatable(0f)`——`onPreScroll` 下滑 `snapTo` 立即收窄、`onPostScroll` 判定「主体列表到顶」即 `animateTo(0f)` 弹回全高（无需二次滑动）；方向修正（下拉收窄、上推恢复）；`logo` 加果冻 spring（banner 仍 1:1 跟手、去掉弹簧拖影），`logoRefH` 固定全展开高度防随折叠缩小。
+- **LAND_3 大屏横屏 banner 无美术时隐藏（07-26）**：`LandscapeBody` 顶部 banner 原 `if (variant.structure == GPStructure.LAND_3) HeroBanner(...)` 改为 `if (variant.structure == GPStructure.LAND_3 && data.hasArt) HeroBanner(...)`，与竖屏分支（`if (data.hasArt)`）对齐。`data.hasArt` 覆盖内置 + SteamDB 提取美术；无美术时右内容栏顶部直接接 Tab/内容、不露空横幅；LAND_2（中小横屏本无顶部 banner）不受影响。
+- **竖屏 banner 恒定 3.097:1 动态高度（07-26）**：平板竖屏（如 Cities Skylines）`bannerW≈1080dp` 配固定 `heroHeight=220dp` → 容器宽高比 ≈4.91:1（远超 3.097:1），hero 居中后左右大量留白、accent 渐变透出、观感割裂。竖屏分支 `val fullH = variant.heroHeight` 改 `variant.heroHeight.coerceAtLeast(heroMinH)`（不足 3.097:1 所需即向上拔到 `heroMinH`，保持宽:高 ≤ 3.097:1）。各 variant 影响：CompactPortrait（手机竖屏）heroHeight 已大于 heroMinH → 透传、原折叠行为保留；MediumPortrait（平板竖屏）启用动态高度、折叠自动 neutral（内容区有富余、禁折叠可接受）；LAND_3 顶部 banner 独立计算（`isXL?240:200dp`）不受影响；横屏 LAND_3 走 `useOriginalRatioHero`（`bannerW/srcRatio`）本就满足 3.097:1。
+- **banner 内部边距拆分（16/12dp）**：外层 banner 不加 padding 铺满、hero 铺满边缘到边缘；logo 单独内层盒 `padding(16,12)` 仅服务 logo 安全区（不推开容器外 margin）。**教训：给内容加内边距又不想产生外 margin，必须把 padding 加在内部内容容器上。**
+- **清除/提取新美术后背景不立即刷新修复**：`gameDataCache` 是普通 Map 写入不触发重组、`artVersion++` 只驱动 hero/logo 重读；新增可观察信号 `artRefresh` + `LaunchedEffect(artVersion)` 用 `snapshotGame` 重读快照并 `++artRefresh` 驱动背景 `AnimatedContent` 重读——清除回退 accent 渐变、提取新文件即时换背景。
+- **截图查看全部页完全镜像 SteamArtHubActivity 范式（二级子页铁律）**：EXTRA_LABEL/EXTRA_ACCENT 透传 + `setContent` 立即全屏渲染无占位 + 屏内异步 `GameArtResolver.load` + accent 渐变回退；**废除 ready 闸门**（标题栏同步已知、`statusBarSafeTop()` 已避让状态栏，闸门纯多余且造成硬切）；**背景跨页零延迟继承**（`gameArtCache` LruCache(16) 同步 `peekGameArt/peekArtBitmap`，进页首帧命中缓存即显完整美术背景，accent 渐变仅作进程重建兜底）。
+
+### SteamDB 美术提取系统（全新模块）
+- **活动链路**：`SteamArtHubActivity`（入口：提取 / 自定义 / 重新提取 / 查看全部 / 清除）→ `SteamArtExtractActivity`（WebView 探针，`keepScreenOn`、View 键日期）→ `SteamArtCustomActivity`（自定义导入）→ `GameScreenshotsAllActivity`（查看全部截图）。
+- **三层架构**：`domain/`（提取任务 `ExtractAssetsUseCase` / `AssetSelector` / `ExtractionTiming`、模型 `AssetKind` / `SteamAsset` / `ExtractionState`）、`data/remote/`（商店兜底 `StoreApiClient` appdetails、`SteamCdnAssets` 静态图、`AssetDownloader`）、`data/webview/`（`CfWebViewClient` / `SearchWebViewClient` / `SteamWebViewFactory` / `SteamWebViewPolicy` / `ExtractionBridge`）、`ui/`（`SteamArtGraph` / `SteamArtViewModel` / `SteamArtContracts`）。
+- **提取时序 4 阶段**：accent → library（胶囊/海报）→ logo（标志）→ background（背景）。`ExtractAssetsUseCase` 必须 `channelFlow{send}`，严禁 `flow{emit}`（跨线程崩 Flow invariant）。
+- **WebView 探针与 Cloudflare**：`SteamWebViewPolicy` 白名单仅 `steamdb.info`；`CfWebViewClient` 抓取多图、连锁错误回退；CF 检测分级（强信号立即短路、弱信号 `challenge-platform` 仅零链接时判）；CF-free 兜底 `SteamCdnAssets` + 12s `scheduleProbeFallback`。探针生命周期：每次提取独立 Activity+WebView+VM，完成后彻底 tear down（`stopPolling`/`stopLoading`/`clearCache(true)`/`destroy`/`WebStorage.deleteAllData`/`CookieManager.flush`）；**只保留 cookie 过 CF，绝不 `removeAllCookies`**。
+- **稳定性 hardening（07-26 用户授权）**：`SteamSearchWebView` 删除全局 `WebStorage.deleteAllData()`、改仅 flush Cookie（避免污染并发提取 WebView 的 CF 状态）；`onAdultGate(false)` 解锁后加 `GATE_CLEAR_DEBOUNCE_MS=3000L` 等待再定稿；`detectAdultGate` 补回 `mature|nsfw` 关键词；`PROBE_FALLBACK_MS` 弱网（移动/计量网络）自动延长到 20s；`extractFired` 改 `AtomicBoolean.compareAndSet` 消除双计时器竞态；`CfWebViewClient` 加 `shouldOverrideUrlLoading`（受 `SteamWebViewPolicy.isAllowedTopLevelNavigation` 限制）。`isLikelyWeakNetwork` 必须 suspend + `withContext(Dispatchers.Main)` + `ContextCompat.checkSelfPermission` 先验权限（缺失返回 false 走 12s），并对 `getActiveNetwork`/`getNetworkCapabilities` 包 `runCatching` 防个别设备无权限仍抛 SecurityException 崩溃。
+- **缓存落盘**：下载至 `filesDir/steamart/<pkg>/`，JDK `HttpURLConnection`（无 okhttp/coil）；同包多 `GameArt` 合并（`GameArt.merge`）；`FileGameArtProvider` 优先 `AssetGameArtProvider`；刷新链 `RESULT_OK → artVersion++ → 重读`；`ArtSource.File` 带 `lastModified`，`clearArtCachesForPackage` 防串味。`LruCache(64)` 取色单源（`extractAccent` + `FileGameArtProvider`）。
+- **主题注入点**：`GamePage` 主题 / 截图画廊 / `GameArtBackground`（原 `SteamArtBackground`）跨页一致使用取色背景。
+- **可清除性增强（07-26）**：`GameArtTombstone` 墓碑标记（`filesDir/steamart_cleared/<pkg>`），「清除」先 `deleteRecursively` + `mark` + `clearArtCachesForPackage`；`GameArtResolver` 在 File 层 miss 且 `isCleared` 时直接返回 false 不回落内置 → 预设/内置游戏（无限暖暖/绝区零/鸣潮）也能真正回到无美术初始态，重新提取自动绕过墓碑。
+- **提取 WebView 顶部渐变遮罩（07-26）**：`SteamArtExtractActivity` 在 WebView 之上、标题栏之下加纯装饰 `verticalGradient(Black 0.6→Transparent)` 遮罩（全幅铺满、不加挖孔适配、不加 clickable 穿透到 WebView，不影响 Cloudflare 验证点击）。
+- **自定义主题资产 6 槽修复（07-26）**：`AssetKind.required` getter 排除 `CAPSULE_SMALL`（与 `HEADER` 同处理），恢复 6 槽 = hero/hero_capsule/library_capsule/library_header/logo/page_bg_raw（修复小头图槽挤占、page_bg_raw 被顶出视图的 bug）；`customFileName` 补 `CAPSULE_SMALL` 显式分支消除误写主视觉隐患。
+- **自定义主题真实尺寸贯通（07-26）**：`writeCustomMeta` 补 `widthPct/heightPct` 写入、加载侧补读，SteamDB 导入 logo 携真实百分比→`computeLogoBox` 精确尺寸分支（修复自定义主题 logo 全变 50%×50%）；`logoScale` 由五档离散改**无极连续**（0.5~1.5）+ 智能推荐初值（手机竖屏按 widthPct 推荐、横屏/平板恒 1.0），且修复「推荐值无条件覆盖已存档 logoScale」的 bug。
+- **自定义主题 6 槽被 CAPSULE_SMALL 挤占修复**：`AssetKind.required` 排除小头图（与 HEADER 同处理），恢复 6 槽 = hero / hero_capsule / library_capsule / library_header / logo / page_bg_raw（原小头图槽误写 `library_hero.jpg` 顶掉 page_bg_raw）。
+- **自定义主题丢弃 SteamDB 真实矩形尺寸修复**：`writeCustomMeta` 补 `widthPct/heightPct` 参数 + 加载侧读取，避免所有自定义主题 logo 统一 50%×50%（仅 logoScale 能差异化）。
+- **自定义主题「关掉 logo 贴边不回退」bug 修复**：`changed` 改与进入时初始快照（`initialPin/initialScaleIdx/initialCrop`）对比，修复「关掉本就开启的开关」被漏判成「没改」导致 meta 仍记 true。
+- **isLikelyWeakNetwork SecurityException 崩溃修复**：`AndroidManifest` 新增 `ACCESS_NETWORK_STATE`；`isLikelyWeakNetwork` 改 `suspend` + `withContext(Main)` + 先验权限 + `runCatching` 包 `getActiveNetwork/getNetworkCapabilities`，个别设备无权限仍抛异常时返回 false 走 12s 兜底。
+- **内置 gameart 仅 debug 变体可见（07-26）**：`app/src/main/assets/gameart`（内置 SteamDB 美术兜底：无限暖暖/绝区零/鸣潮 3 款 + `manifest.json`，19 文件）物理移至 `app/src/debug/assets/gameart`，AGP 自动仅并入 debug 源集、不进 release APK；无需改代码——`AssetGameArtProvider` 用相对路径 `gameart/...` 读取，`parseManifest()` 被 `runCatching{}.getOrDefault(emptyList())` 包住，release 下 manifest 缺失时 `hasArt`/`load` 优雅返 false/null 不崩。
+
+### Logo 定位系统（Steam 库规范合规）
+- **9 点双对齐体系**：`LogoPosition` 由 9 点枚举（TopLeft…BottomRight）+ 真实百分比（`widthPct`/`heightPct`，范围 -100~200 含溢出）+ `anchor` 双对齐构成，支持 Steam 库级 logo 浮于 Hero 任意位置（含跨边溢出）。字符串/百分比双表示，持久化 `meta.json`。
+- **真实百分比体系**：`positionX/Y` 取 SteamDB 真实百分比（非归一化 0~1）；`computeLogoBox` 以**（去 padding 的原图全尺寸 bannerWpx/bannerHpx，严格 3.097:1）** 为基准乘积，无 autoScale 压缩、无 dynamicScale 倍率（07-26 最终复核：从旧的「banner−24dp 内边距区」改为乘全图，并移除渲染容器 `padding(HERO_LOGO_PAD)`、删除该常量，logo 按去 padding 全图坐标系锚定角对齐，1:1 复刻 SteamDB 定位）。
+- **自定义主题连续滑块**：`logoScale` 由 5 档（0.6/0.8/1.0/1.2/1.4）改为**连续滑块**（默认 1.0，每游戏独立）；`logoCrop`（`cropTransparentEdges` alpha 包围盒裁剪，默认关）；JSON `logo_scale`/`logo_crop`，退出写 `meta.json`。`recommendLogoScale`：HoYo/默认/预设分级推荐。
+- **预设 AppId 与 logo_position（07-26 用户校正，此前 AI 臆造值已纠正）**：无限暖暖=3164330、绝区零=4162040、鸣潮=3513350；预设 `logo_position`（仅兜底默认值，由用户 07-26 提供真实 SteamDB 值）均为 BottomLeft 的 width/height：无限暖暖=17.73611/42.36111、绝区零=37.18221/71.32872、鸣潮=22.66531/45.13934。
+- **优先级（tombstone）**：Logo 落盘优先级 **WebView 探针 > 商店 API > 已导入定位(重提取前从 meta.json 捕获) > 预设兜底**；任何真实导入/提取得到的定位都覆盖预设，预设仅在所有真实来源都缺失时生效。banner 内边距 16/12 两档。
+- **提取落盘**：`SteamDB` logo_position 新增第 4 解析策略（`<td>` 表格 `KEY(带 logo_position/ 前缀) → VALUE` 正则解析）；提取前先查 `GameWhitelist` 校验 AppId/戏名一致，未知 AppId 不强制提取、无匹配不提取。
+
+### 玻璃拟态全站改造（Glassmorphism）
+- 新增 `ui/theme/GlassState.kt`：主活动入口默认全开 `LocalGlassEnabled`（含 `onResume` 重写取色驱动），各子页默认关（避免性能/视觉冲突），由 `HomeViewModel` 单源驱动。
+- `frosted` 用 `RenderEffect` / `Motion.blur` 实现毛玻璃；`WallpaperBackground` 改用模糊壁纸做毛玻璃底（`enableEdgeToEdge` 全屏壁纸铺满 + 模糊）。
+- `SurfaceTokens` 新增 `Overlay`/`glass` 感知：玻璃表面用 `glassBg = background.copy(0.72f) + blur` 而非纯色卡片；`AppDetailPanel` 玻璃化（横屏右栏 + 竖屏浮层共用）。
+- 子页（About/Licenses/CompatGuide/GamePage）明确玻璃开关策略，避免与 `SurfaceTokens.cardSurface` 冲突。
+
+### 动画机 MotionMachines（动画归一）
+- 新增 `ui/theme/MotionMachines.kt`：统一 `crossfade` / `backgroundCrossfade` 等可复用动画机器，**严禁页面散落一次性动画**（铁律：已存在则引用，不存在则先沉淀再引用）。
+- `GamePage` 切游戏背景 `backgroundCrossfade` 复用；删除旧 `heroScrollCollapse`（动画机未含此效果，散落实现移除，改由布局自身处理）。
+- 节庆/焦点高亮等复用既有机器，不重复自绘。
+
+### 手柄交互归一化（子页 + 焦点 + 震动）
+- `gamepad/SubPageGamepad.kt` 重命名为 `SubPageGamepadHost.kt`：子页统一薄宿主（右摇杆物理滚动 `RightStickScrollPhysics.step` + 焦点回写 `rightStickFirstVisible`），严禁子页自写摇杆解析；连发参数 `SUBPAGE_REPEAT_* = 240/1200/150ms`（主页 `180/600/80ms`）。
+- **右摇杆轴污染修复（07-19）**：`SubPageGamepad.dispatchMotionEvent` 改用 `AXIS_RY`（右摇杆），剔除 `AXIS_RZ`（右扳机 RT）污染——修复「按 RT 切游戏误触发页面滚动」的真实 Bug；后续归一为 `GamepadManager` 单一真源 `rz ?: ry` 兼容双轴设备。
+- `ui/components/SubPageKeyHandler.kt`：归一子页 `onKeyEvent` 处理（按键判定 `ev.nativeKeyEvent.action != KeyEvent.ACTION_DOWN`；Activity 自管 `onGenericMotionEvent`；`when` 多条件用 `||`），About/Licenses/CompatGuide/GamePage 统一接入。
+- **焦点恢复**：子页恢复焦点用 `hasFocus` + `onFocusChanged`（非旧 `focused` 双标志），避免 GamePage 焦点框锁死（07-19 根因 = `collectAsState` 漏订阅 + `focused` 标志未同步解锁）。
+- **震动归一 + 强度可调（07-26 升级）**：`Haptics` 单例（tick/click/error 按 `HapticIntensity` 缩放，OFF 早返回）；修正旧硬编码 `hasPrimitives=true` 致**全局零震动**的真实根因——改用 `arePrimitivesSupported(BooleanArray).all{it}` 真实探测 + `createOneShot` 兜底；删除旧 `VibratorManager` 代理、杜绝双震（旧 `view.performHapticFeedback` + `Haptics` 叠加）。
+- **震动触感强度（07-26）**：设置页新增 `HapticIntensity` 下拉（强 / 中 / 弱 / 关闭，旧单开关归类为「弱」），`SettingsRepository` 持久化 + 旧 boolean 键兼容迁移；增删档只改枚举与 `Haptics` 缩放映射，调用点类型不动。
+- **游戏子页面震动缺失修复（07-26）**：`Haptics.init` 仅 `MainActivity` 调一次（进程级单例，禁游戏 Activity 重 init 破坏实时档位）；`GamePage.kt` 主页面裸 `onKeyEvent` 补齐方向/肩键/扳机=tick、A/B/X=click；`SubPageGamepadHost.onNavigate` 集中注入左摇杆/Hat `Haptics.tick()`（单一出口），移除美术子页 navFlow 多余 tick 防双发。**双震铁律**：key 路径（subPageKeyHandler）与摇杆路径（navFlow/onNavigate）互不重叠，绝不在 moveFocus/activate 内再写 Haptics。
+- **设置页下拉 X 键循环切换（07-26）**：`SettingsControlBridge.onCycle(Int)->Boolean`——Dropdown 行循环切换下一项（向下闭环）+ `Haptics.tick()`，非 Dropdown 行返回 false 走原 `onFavorite` 信息弹窗；`DropdownListItem` 聚焦且手柄连接时 trailing 加 `Hint(KeyToken.X,"切换")`。
+- **子页标题栏归一化**：所有 2/3 级子页统一 `KeyBadge.SubPageTitleBar`（40dp 返回钮），禁额外渐变遮罩/高头/大标题块；基准 `SubPageScaffold`：标题栏固定、`Dimens.SubPageTopBarHeight=56dp`、内容 `Column(weight(1f)+verticalScroll)`。
+- **右键焦点随滚动**：游戏页家族与 `SubPageScaffold` 同构（焦点变即跟随），`GamePageActivity` 切游戏 `animateScrollToItem`。
+
+### 设置项文案精简与 info 纪律（07-26）
+- **需求**：设置页全部设置项 `desc` 精简至 ≤15 中文字符（上限非固定字数，须自然长短 4~15）；必要项加 `info` dialog（`infoTitle`/`infoText`/`imageRes`）并适配配置。
+- **用户纠正 info 过度（收尾）**：初版误把"≤15 字"理解成"全压 6 字"（22 项整齐 6 字机械呆板，且「排序方式」误写成「应用到全部应用」文不对题），并加了 16 项 info（违背"只做必要的"）。修正：描述恢复自然长短、顺序方式→「选择列表排序规则」；**info 仅保留「导出应用列表」一项**（JSON+AI 分类映射工作流放不下 15 字），其余 15 项全部移除，导入/清除分类映射说明并入导出项 info。长期约定已写入 MEMORY.md。
+- **现状**：全部 22 项 desc 已精简（最长「恢复默认并清收藏」9 字、「版本信息、特别感谢、开源许可」12 字，均≤15）；`DropdownListItem` 聚焦 + 手柄连接时 trailing 加 `Hint(KeyToken.X,"切换")`（配合 `SettingsControlBridge.onCycle` 循环切换）。
+
+### 组件与令牌归一化
+- 新增 `ui/components/BottomFadeMask.kt`（底部渐隐遮罩，回收既有散落实现）、`ui/components/LayoutModifiers.kt`（`statusBarSafeTop` 状态栏安全区）、`ui/components/ScrollProgressBar.kt`（滚动进度条）。
+- `CenteredHint` 复用统一居中提示；`DialogScaffold`（07-14 已建）继续作为全站 dialog 模板（scrim + 居中卡片 + 底部 HintBar）。
+- `SurfaceTokens` 继续收敛 alpha 语义色（焦点/卡片/遮罩/静音文字/Toast），禁手写 `copy(alpha=)` 除图片 scrim；收藏星标金 `Theme.kt::FavoriteStar`。
+- 手势阈值统一 `defaultGutter=16dp`；状态栏安全区 `LandscapeTheme.edgePadding`；未知应用占位（steamart/<pkg> 缓存 + 图标占位）。
+
+### 统计页增强
+- **「次数」维度**：统计新增按启动次数的维度（与时长并列）。
+- **系统应用聚合**：统计聚合系统/自身包，避免污染排行。
+- **逐日列表倒序**：`getDailyUsageList` / `getMonthlyUsageList`（倒序），`DailyPlaytimeList`（标题随周期动态：今日各小时 / 近7天每日 / 近30天每日 / 近12个月每月；最新最上；零值「—」）。
+- **快速按钮锚点**：`StatsQuickButtons`（最近游玩→排行区 / 总计时长→列表区，均在统计页内锚点滚动，不跳设置页）；`RecentsRow` 标题可点击进统计页。
+
+### 搜索增强（拼音搜索）
+- 新增 `util/Pinyin.kt`：拼音搜索（按拼音/首字母匹配应用名），与 `label` 过滤合并。
+- **搜索页手柄键位最终定稿（07-26，推翻 07-25「Y 默认 LIST」）**：进入搜索页**默认 INPUT 态**（输入框获焦 + 软键盘弹出）；推左摇杆任意方向或按 Y 进 LIST（与主页 Y=收藏分流，搜索页 Y **绝不收藏**）。A=进详情浮窗（右栏）；X：**INPUT 态=清空输入框 / LIST 态=直接启动焦点项**（含游戏均 `launchApp`，游戏页归 A，不套「游戏特殊处理」）；Y INPUT⇄LIST；B：INPUT→LIST 收键盘 / LIST→返回。`searchResults` 即渲染 `visibleList` 同源。
+- **INPUT 态摇杆方向穿透根因修复（07-26）**：`GamepadManager.emitAxisDirection` 原 `canNavigate = navigationEnabled || dialogActive || (dir==DOWN && searchInputExitDown)` 在 INPUT 态丢弃非 DOWN 方向 → 改为 `searchInputExitDown`（左摇杆任意方向穿透）；D-pad 走 `onKeyEvent` 路径仅判 `navigationEnabled` → INPUT 态原生 KeyEvent 落到输入框=**移动文本光标**（让位 IME），此分工经用户明确。底部提示栏 INPUT 态加 `←→ 移动光标` 提示（BottomHintBar 规则4 唯一例外）。
+- **搜索页 UI 去冗余（07-26）**：移除列表项聚焦态 Y 键位浮块（与底栏「Y 输入」冲突且搜索页 Y 非收藏）、移除计数标题栏 header 焦点节点（首项 UP 不再回 INPUT，INPUT 仅 Y 激活）；`SearchTabContent` 顶部搜索图标恒显 `Icon(Search)`（去与底栏重复的 Y 浮块）。
+
+### 修复与稳定性合集
+- **竖屏点按不弹详情抽屉**：竖屏 `AppList` 改用显式 `onOpen` lambda，非游戏走 `onFocus + onOpenPortraitDrawer`（原依赖焦点变化触发，已聚焦项二次点按不触发）。
+- **设置页 LT/RT 无法切 Tab**：`MainActivity` 的 `viewModel.settingsOpen.collect{}` 原把 `gamepad.passthrough` 置 true 导致 `GamepadManager` 直接 return 不推事件流；改为恒 false（设置页是 HomeScreen 内焦点页，全部由事件循环驱动）。
+- **进入其它应用重置到首页**：Manifest 移除 `stateNotNeeded`、新增 `alwaysRetainTaskState="true"`；`SettingsRepository` 新增 `lastMainTab`（持久化，resetAll 不重置），`HomeScreen.currentTab` 初始化恢复上次 Tab。
+- **启动后不保留进程开关**：新增「启动游戏后不保留 Reverie 进程」（默认关），开启后 `launchApp` 成功即 `finishAndRemoveTask()`；GAME_SETTINGS 入口先尝试游戏自身 `CATEGORY_PREFERENCE`，否则回退系统应用信息页；合并卸载/强停为顶栏「应用信息」（`ACTION_APPLICATION_DETAILS_SETTINGS`）。
+- **GamePage 编译阻断修复**：`EdgeToEdge.kt` 的 `OnBackInvokedCallback`/`OnBackInvokedDispatcher` 改为平台类型 `android.window.*`（API 33+），修正 `androidx.activity:activity:1.10.0` AAR 未暴露该类型。
+- **上次游玩显示陈旧（「8 天前」）根治**：`queryLastUsed` 由 `firstOrNull` 命中最旧时间桶，改为 `filter{pkg}.maxOfOrNull{lastTimeUsed}` 取真实最近一次（UsageStats 同包多桶根因）。
+- **权限/同步审计**：`UsageStats.hasUsagePermission` 改 `AppOpsManager` 检查；同步期限保留（不短于合理窗口）。
+- **自定义图标裁剪**：`cropTransparentEdges` alpha 包围盒裁剪；未知应用占位图标。
+- **邮件/微信/QQ 启动**：系统 Intent 跳转；首页返回二次确认气泡（「再次返回退出 Reverie」）。
+- **构建环境约定（重要）**：离线编译遇 `Could not reserve enough space in CodeHeap` 先清 `_JAVA_OPTIONS=''`；JDK 路径 `jdk-17.0.25.6-hotspot`（注：07-19 实测为 `jdk-17.0.25.6-hotspot`）、内存紧张时 `JAVA_TOOL_OPTIONS=-Xmx1536m -XX:MaxMetaspaceSize=512m` 先 `gradlew --stop`。
+
+### Bug 修复补充（07-19~07-26 遗漏项）
+- **游戏页焦点框锁死（07-19）**：`GamePage` 焦点框不随手柄插拔解锁，根因 = `collectAsState` 漏订阅 + `focused` 标志未同步解锁；改为 `hasFocus` + `onFocusChanged` 单一驱动（见「手柄交互归一化」）。
+- **截图二级子页「滚到底/半途卡住全部刷新」（07-24）**：`ScreenshotWaterfallTile` 的 `LaunchedEffect` 把 `skipEntrance`(=`isScrollInProgress`) 列为依赖，滚动停止瞬间标志翻转使所有留视口项同时重放。修复：依赖改为仅 `shouldRender`（`skipEntrance` 仅 effect 内读值）+ `if(appeared) return` 锁存；父级用 `derivedStateOf` 派生 `visibleRange` 替代逐帧全量扫描。
+- **覆盖导入遗留 bg.png 导致游戏页不替换（07-24）**：`FileGameArtProvider.load` 的 `bg = PAGE_BG_RAW ?: bg.png` 让 demo 遗留的 `bg.png`(hero 副本) 始终作背景回退，覆盖导入不清旧产物→背景不更新。修复：互认改读时回退 `PAGE_BG_RAW ?: bg.png ?: LIBRARY_HERO`；`ExtractAssetsUseCase` 新增 `cleanupStaleArtifacts` 在下载完成后清孤儿文件（保留 `meta.json` 与真实美术种类）。
+- **美术输入框色条穿透（07-24）**：`SteamArtHubActivity` 两处 `OutlinedTextField` 未设 `focusedIndicatorColor` → 默认回退 `scheme.primary` 穿透（全仓库 grep 0 命中）。统一补 `focusedIndicatorColor=accent` / `unfocused/disabled=SurfaceTokens.mutedOnSurface(Faint)`，彻底隔离 primary/莫奈。
+- **Widget 跨游戏串扰（07-25）**：`rebuildWidgetSlots`/`refreshScreenshotState` 实际只在 `onCreate` 对初始包调用，`onSwitchGame` 走 `applyFromCache/loadGame` 均不重建；且切游戏 `LaunchedEffect(pkg)` 内仅写了 debug overlay 的 sharedprefs、rebuild/refresh 调用丢失（此前「Widget 中途消失」修复静默回归）。本次在 `LaunchedEffect` 内补回 `delay(GAME_SWITCH_THROTTLE_MS); rebuildWidgetSlots(pkg); refreshScreenshotState(pkg)`。
+- **游戏页入场割裂 / 截图子页黑屏（07-25）**：`GamePageActivity` 原在 `AnimatedVisibility` 内插 `Box` 致整页割裂 → 背景层提升为独立 `AnimatedContent`（`MotionMachines.crossfade()` 复用）+ 内容层保留原 `pageSwitch`，背景 `accent` 兜底 `primary`；`GameScreenshotsAllActivity` 加首帧占位纯色（= `background_dark`）+ `LandscapeTheme` 包裹（此前无 MaterialTheme 致黑屏）。
+- **SteamDB 提取链路「门控竞态漏抓」（07-26，严重）**：① `onLinks` 首个非空即 `stopPolling+stopLoading`（过早停轮询）；② `onAdultGate(true)` 原未取消已调度的防抖(1.2s)/硬上限(3s)计时器 → 1.2s 后以「非门控残缺链接」点火，门控资产（`page_bg_raw`/`hero_capsule`/`logo` 等 `revealAdultContent` 后才注入 DOM）永不被扫到 → 只能靠商店 API 兜底（表象「探针未生效」）。修复：轮询延后到 `state` 进入 `Downloading/Done/Error` 才停；`onAdultGate(true)` 取消过早计时器 + `scheduleExtractionAfterGate`(GATE_CLEAR_DEBOUNCE_MS=3s) 以完整累积链接点火。
+- **提取下载性能（07-24）**：`AssetDownloader.download` 由串行单连接改为**按主机分组 + 组内 keep-alive 复用 + 组间有界并行（Semaphore=4）**，整体耗时由 Σ(握手+传输) 降为 max(各主机链路)；`CfWebViewClient.getJs()` 的 ~200 行探针改为 `private val JS_PROBE` 只构建一次（消除每轮询重建大字符串）；首个非空链接即停轮询释放 CPU/带宽给下载器。
+- **截图二级页进入 ~0.5s 纯色占位延迟（07-26）**：原走「渲染→逐帧异步填充」阶梯累计 3-5 帧占位。对齐 GamePage 预载模式：`onCreate` 内单个 `lifecycleScope.launch(Dispatchers.IO)` 一次性预载 `app→art→accent→背景位图`，`setContent` 门控 `preloadState`（null→占位、非 null→一帧全量渲染）；`GamePageLayouts` 补缺失 `import kotlinx.coroutines.launch`（否则阻断全量编译）。
+
+### 修复与稳定性补充（07-26 当日追加）
+- **二级子页背景跨页零延迟继承（07-26）**：新增进程内 `gameArtCache = LruCache(16)` + 同步 `peekGameArt`/`peekArtBitmap`（无 IO），所有美术/截图子页首帧即命中缓存显示完整背景（位图也命中 `artBitmapCache`），进程重建才走异步补帧 + accent 渐变兜底；`GameScreenshotsAllActivity` 完全镜像 `SteamArtHubActivity` 范式（SteamArtContracts 透传 LABEL/ACCENT + 同步读 + 立即全屏渲染无占位 + 屏内异步 load + accent 渐变回退），废除自定义 handoff/占位盒/预载协程（此前两度偏离均引入包名泄漏与状态栏重叠 bug，沉淀铁律「二级子页必须照搬 SteamArtHub 范式」）。
+- **Widget 渐入渐出 + 缓存复用（07-26）**：`MotionSpec.WidgetFade`(300ms) + `MotionMachines.widgetFade(reduceMotion)` 沉淀（先查全局动画机无同效，未散落一次性动画）；`AnimatedContent` 的 `targetState = widgetVersion to widgetLoading` 覆盖切游戏重建 + 加载→内容两条过渡，转圈 `WIDGET_LOADING_FALLBACK_MS` 改为 300ms。「加载键错位」真·性能 bug：原 `onWidgetRefreshed(宿主包名)` 与 `widgetLoading` 键（游戏包名）错配→切回空转 ~1.5s 转圈；改为传游戏包名 + `widgetHostViewCache` 键「游戏包|宿主包」复用 HostView（切走不销毁、切回秒显上次状态、零重建零转圈）。Widget 进页才 `rebuildWidgetSlots`（LaunchedEffect(pkg)），加载期间转圈，首次刷新信号 `RefreshAwareAppWidgetHostView.updateAppWidget` 回调结束加载态。
+- **子页返回键半透明框修复（07-26）**：`SubPageBackButton`/`TitleBarIconButton` 的 `backgroundColor` 默认 `if(isFocused) focusBgStrong else Transparent` 未与 `LocalShowFocusIndicators` 做与运算→未连手柄时焦点状态机 focusIndex=0 仍常驻半透明底；改为 `if (isFocused && LocalShowFocusIndicators.current) SurfaceTokens.focusBgStrong() else Transparent` 全子页统一。
+- **折叠 banner 到顶弹回失效修复（07-26）**：`GamePageLayouts` 的 `onActiveListState` 两处（Portrait/Landscape）原只透传未回写内部 `bodyListState`→`atTop` 恒 false→`animateTo(0f)` 永不触发；改为 `{ st -> bodyListState = st; onActiveListState(st) }` 既捕获又上报。
+- **Widget 首屏/切游戏不刷新（startListening 提前，07-26）**：根因 = `WidgetHostManager.createView()`（rebuild 触发）向 Provider 请求 `ACTION_APPWIDGET_UPDATE`，但 `startListening()` 原在 `onStart` 调用、晚于 `onCreate` 的 `rebuildWidgetSlots()` → 创建 View 时宿主未监听、初始更新广播丢失 → Widget 停留默认空态。修复：`onCreate` 中 `startListening()` 提到 `rebuildWidgetSlots` 之前、`onStart` 移除（免双重注册 receiver）、新增 `onRestart` 调 `startListening`、`onStop` 保留 `stopListening`（生命周期配对 onCreate/onRestart→start、onStop→stop）。
+
+---
+
 ## [1.0.0 (2)] — 2026-07-12
 
 **正式发布版本。** 从 0.1.0 (1) 的「系统桌面 / 游戏大屏」原型，演进为完整的「游戏空间（Game-Space）」横屏启动器，完成 API 36 全量合规、深度手柄化、统计页、设置页重构、动效系统统一、启动性能优化与多轮崩溃修复。

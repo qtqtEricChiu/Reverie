@@ -6,10 +6,13 @@ package cn.mocabolka.run.launcher
  */
 object GameWhitelist {
     val packages: List<String> = listOf(
-        "com.kurogame.mingchao",      // 鸣潮
-        "com.miHoYo.Nap",             // 绝区零
-        "com.papegames.infinitynikki", // 无限暖暖
-        "com.mojang.minecraftpe"       // Minecraft
+        "com.kurogame.mingchao",             // 鸣潮（国服 / CN）
+        "com.kurogame.wutheringwaves.global", // 鸣潮（国际服 / Google Play）
+        "com.miHoYo.Nap",                    // 绝区零（国服 / CN）
+        "com.HoYoverse.ZenlessZoneZero",     // 绝区零（国际服 / Google Play）
+        "com.papegames.infinitynikki",       // 无限暖暖（国服 / CN）
+        "com.infinitynikki.gp",              // 无限暖暖（国际服 / Google Play）
+        "com.mojang.minecraftpe"             // Minecraft（全球同包名）
     )
 
     /** 判断某个 category 是否属于「娱乐相关」（视频 / 音频）。 */

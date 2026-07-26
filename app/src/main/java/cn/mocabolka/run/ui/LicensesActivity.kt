@@ -1,26 +1,19 @@
 package cn.mocabolka.run.ui
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.OnBackPressedCallback
+import cn.mocabolka.run.ui.enablePredictiveBack
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.collectAsState
-import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
-import cn.mocabolka.run.gamepad.SubPageGamepad
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
+import cn.mocabolka.run.gamepad.Direction
+import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import kotlinx.coroutines.flow.MutableSharedFlow
 import cn.mocabolka.run.ui.components.LicensesPage
 import cn.mocabolka.run.ui.theme.LandscapeTheme
-import cn.mocabolka.run.ui.theme.MotionSpec
+import cn.mocabolka.run.ui.theme.MotionMachines
 
 /**
  * 开放源代码许可页（独立 Activity，与 About / CompatGuide 同构）。
@@ -34,68 +27,47 @@ import cn.mocabolka.run.ui.theme.MotionSpec
  */
 class LicensesActivity : ComponentActivity() {
     /** 右摇杆滚动引擎。 */
-    private lateinit var subPageGamepad: SubPageGamepad
+    private lateinit var subPageGamepad: SubPageGamepadHost
     /** 列表状态提升到 Activity 字段，供右摇杆滚动引擎访问。 */
     private lateinit var listState: LazyListState
     /** 右摇杆滚动后引擎回写的首个可视项索引（焦点跟随桥梁）。 */
     private val rightStickFirstVisible = kotlinx.coroutines.flow.MutableStateFlow(-1)
+    /** 左摇杆 / Hat 导航事件桥梁：SubPageGamepad.onNavigate 推入，SubPageScaffold 订阅驱动焦点。 */
+    private val navFlow = MutableSharedFlow<Direction>(extraBufferCapacity = 16)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         listState = LazyListState()
-        subPageGamepad = SubPageGamepad(
+        subPageGamepad = SubPageGamepadHost(
             lifecycleScope,
             getState = { listState },
-            onFocusSync = { rightStickFirstVisible.value = it }
+            getFirstVisibleItemIndex = { listState.firstVisibleItemIndex },
+            onFocusSync = { rightStickFirstVisible.value = it },
+            onNavigate = { dir -> navFlow.tryEmit(dir) }
         )
         subPageGamepad.start()
-        // 沉浸式：隐藏状态栏，全屏显示（跟随 About 沉浸风格）
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.statusBars())
-            systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        // 沉浸式 + 边缘到边缘（统一预测性返回手势窗口配置）
+        setupEdgeToEdgeImmersive(hideStatusBar = false)
         // 预测返回手势（minSdk=36 恒生效）：支持系统级返回退出，回到 AboutActivity。
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    finish()
-                }
-            }
-        )
+        enablePredictiveBack { finish() }
 
         val settings = SettingsRepository(this)
         setContent {
             // 跟随设置-主题切换（深色/浅色/AMOLED/Monet）
-            LandscapeTheme(
-                darkTheme = when (settings.darkMode) {
-                    DarkMode.LIGHT -> false
-                    DarkMode.AMOLED, DarkMode.DARK -> true
-                    else -> androidx.compose.foundation.isSystemInDarkTheme()
-                },
-                useMonet = settings.useMonet,
-                isAmoled = settings.darkMode == DarkMode.AMOLED
-            ) {
+            LandscapeTheme(settings = settings) {
                 AnimatedVisibility(
                     visible = true,
-                    enter = fadeIn(animationSpec = MotionSpec.Medium) +
-                        slideInHorizontally(
-                            animationSpec = MotionSpec.SlideOffset,
-                            initialOffsetX = { it / 6 }
-                        ),
-                    exit = fadeOut(animationSpec = MotionSpec.Medium) +
-                        slideOutHorizontally(
-                            animationSpec = MotionSpec.SlideOffset,
-                            targetOffsetX = { -it / 6 }
-                        )
+                    // 沉浸子页入场 / 出场统一走「动画机列表」subPage*。
+                    enter = MotionMachines.subPageEnter(reduceMotion = false),
+                    exit = MotionMachines.subPageExit(reduceMotion = false)
                 ) {
                     val rsFocus = rightStickFirstVisible.collectAsState()
                     LicensesPage(
                         onBack = { finish() },
                         listState = listState,
-                        rightStickFirstVisible = rsFocus
+                        rightStickFirstVisible = rsFocus,
+                        navigate = navFlow,
+                        reduceMotion = settings.reduceMotion
                     )
                 }
             }

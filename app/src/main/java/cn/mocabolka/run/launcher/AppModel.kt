@@ -33,6 +33,17 @@ data class AppModel(
     val todayUsage: Long = 0L
 )
 
+/**
+ * 判断一个应用是否「应进入游戏专属页面」：
+ * - 系统 FLAG_IS_GAME / CATEGORY_GAME；
+ * - 经本 App 已有分类映射（AI 覆盖 / categoryText）被归为「游戏」的；
+ * - 命中精选白名单 [GameWhitelist] 的（含国服 / 国际服双包名）。
+ * 该判定同时驱动主页入口（[shouldOpenGamePage]）与游戏页左右切换的候选列表，
+ * 使「后期通过分类映射识别为游戏」的应用（如鸣潮）也能适配游戏页。
+ */
+fun isGameLike(app: AppModel): Boolean =
+    app.isGame || app.categoryText == "游戏" || GameWhitelist.packages.contains(app.packageName)
+
 /** 将 ApplicationInfo.category 映射为分组标题（P2-2）。 */
 fun categoryLabel(category: Int): String = when (category) {
     ApplicationInfo.CATEGORY_GAME -> "游戏"
@@ -65,4 +76,18 @@ fun relativeLastUsed(ms: Long): String? {
             .atZone(java.time.ZoneId.systemDefault())
             .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
     }
+}
+
+/** 将时长（ms）格式化为简短可读字符串：s 秒 / m 分 / h 小时 m 分 / d 天 h 小时。 */
+fun formatDuration(ms: Long): String {
+    val totalSec = ms / 1000
+    if (totalSec < 60L) return "${totalSec}秒"
+    val min = totalSec / 60
+    if (min < 60L) return "${min}分"
+    val hour = min / 60
+    val rem = min % 60
+    if (hour < 24L) return if (rem == 0L) "${hour}小时" else "${hour}小时${rem}分"
+    val day = hour / 24
+    val remH = hour % 24
+    return if (remH == 0L) "${day}天" else "${day}天${remH}小时"
 }

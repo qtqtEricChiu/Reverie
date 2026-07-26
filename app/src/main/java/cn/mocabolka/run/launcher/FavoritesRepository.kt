@@ -33,7 +33,9 @@ class FavoritesRepository(context: Context) {
         prefs.edit { putStringSet(KEY, emptySet()) }
     }
 
-    private fun load(): Set<String> = prefs.getStringSet(KEY, emptySet()) ?: emptySet()
+    // toSet() 防御性拷贝：SharedPreferences.getStringSet 可能返回内部可变集合，
+    // 直接持有引用会在后续 edit 时产生数据污染（官方文档明确禁止修改返回值）。
+    private fun load(): Set<String> = prefs.getStringSet(KEY, null)?.toSet() ?: emptySet()
 
     private companion object {
         const val KEY = "pinned_packages"

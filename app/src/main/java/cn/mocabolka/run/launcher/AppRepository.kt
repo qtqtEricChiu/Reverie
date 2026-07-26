@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +18,8 @@ import kotlinx.coroutines.withContext
  * R13：从 192 降到 96。主列表图标显示仅 40dp、详情面板 72dp，96px 在 xxhdpi 下已足够清晰，
  * 同时将全部应用图标内存峰值降低约 4 倍（数百个应用图标场景收益明显）。
  */
-private const val ICON_MAX = 96
+/** 图标位图最大边长（px）。launcher 包内共享（AppRepository / RecentsRepository），改动只需一处。 */
+internal const val ICON_MAX = 96
 
 class AppRepository(private val context: Context) {
     private val pm = context.packageManager
@@ -157,8 +159,12 @@ private fun safeIcon(
         val drawable = resolveInfo.loadIcon(pm)
             ?: resolveInfo.activityInfo?.applicationInfo?.loadIcon(pm)
         val bmp = (drawable?.toBitmap(ICON_MAX, ICON_MAX) ?: placeholder)
-        // 写磁盘缓存
-        IconCache.saveBitmap(context, packageName, bmp)
+        // 真实图标写磁盘+内存；1×1 占位仅写内存，避免污染磁盘缓存
+        if (bmp.width > 1 && bmp.height > 1) {
+            IconCache.saveBitmap(context, packageName, bmp)
+        } else {
+            IconCache.cacheMemoryOnly(packageName, bmp)
+        }
         bmp.asImageBitmap()
     }.getOrDefault(placeholder.asImageBitmap())
 }
@@ -178,8 +184,12 @@ private fun safeIcon(
     return runCatching {
         val drawable = appInfo.loadIcon(pm)
         val bmp = (drawable?.toBitmap(ICON_MAX, ICON_MAX) ?: placeholder)
-        // 写磁盘缓存
-        IconCache.saveBitmap(context, packageName, bmp)
+        // 真实图标写磁盘+内存；1×1 占位仅写内存，避免污染磁盘缓存
+        if (bmp.width > 1 && bmp.height > 1) {
+            IconCache.saveBitmap(context, packageName, bmp)
+        } else {
+            IconCache.cacheMemoryOnly(packageName, bmp)
+        }
         bmp.asImageBitmap()
     }.getOrDefault(placeholder.asImageBitmap())
 }

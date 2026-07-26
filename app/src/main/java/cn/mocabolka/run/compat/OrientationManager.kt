@@ -23,7 +23,8 @@ import cn.mocabolka.run.ui.SettingsRepository
  */
 object OrientationManager {
 
-    /** 应用级方向缓存：最近一次应用的 ActivityInfo 方向值，供各 Activity 创建/恢复时读取。 */
+    /** 应用级方向缓存：最近一次应用的 ActivityInfo 方向值，供各 Activity 创建/恢复时读取。@Volatile 保证跨线程可见。 */
+    @Volatile
     private var appOrientation: Int = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
     private fun start(context: Context, mode: OrientationMode) {

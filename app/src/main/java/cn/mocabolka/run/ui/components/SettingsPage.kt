@@ -1,6 +1,14 @@
 package cn.mocabolka.run.ui.components
 
+import android.content.ComponentName
+import android.content.Context
 import android.os.Build
+import android.content.Intent
+import android.util.Log
+import androidx.compose.ui.platform.LocalContext
+import cn.mocabolka.run.BuildConfig
+import cn.mocabolka.run.ui.Haptics
+import cn.mocabolka.run.ui.HapticIntensity
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -39,25 +47,25 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.FileUpload
-import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.MotionPhotosOff
-import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SettingsBackupRestore
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -84,26 +92,19 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import cn.mocabolka.run.gamepad.GamepadDetector
 import cn.mocabolka.run.ui.DarkMode
 import cn.mocabolka.run.ui.OrientationMode
-import cn.mocabolka.run.ui.components.GamepadBottomHintBar
+import cn.mocabolka.run.ui.theme.edgeSafePadding
 import cn.mocabolka.run.ui.components.Hint
-import cn.mocabolka.run.ui.components.HintBar
 import cn.mocabolka.run.ui.components.KeyBadge
 import cn.mocabolka.run.ui.components.KeyToken
-import cn.mocabolka.run.ui.components.ReverieFilledButton
 import cn.mocabolka.run.ui.components.ReverieIconButton
 import cn.mocabolka.run.ui.components.ReverieTextButton
 import cn.mocabolka.run.ui.theme.Dimens
@@ -156,7 +157,12 @@ data class SettingsControlBridge(
     val dropdownLabel: String = "",
     val dropdownOptions: List<Any> = emptyList(),
     val dropdownOptionLabel: (Any) -> String = { it.toString() },
-    val dropdownOnSelect: (Any) -> Unit = {}
+    val dropdownOnSelect: (Any) -> Unit = {},
+    /** 手柄 X 键：在设置列表聚焦某 Dropdown 行时直接循环切换下一项（不进子菜单）。
+     *  返回 true 表示该行确为 Dropdown 且已切换；false 表示非 Dropdown 行（交由调用方走原 X 逻辑）。 */
+    val onCycle: (Int) -> Boolean = { false },
+    /** 判断给定焦点行是否为 Dropdown 行（供底部提示栏决定 X 提示文案「切换/说明」）。 */
+    val isDropdownRow: (Int) -> Boolean = { false }
 )
 
 private sealed class SettingItem {
@@ -190,7 +196,10 @@ private sealed class SettingItem {
         val value: Any,
         val options: List<Any>,
         val optionLabel: (Any) -> String,
-        val onSelect: (Any) -> Unit
+        val onSelect: (Any) -> Unit,
+        val infoTitle: String = "",
+        val infoText: String = "",
+        val imageRes: Int? = null
     ) : SettingItem()
     data class Info(
         val label: String,
@@ -246,6 +255,10 @@ fun SettingsPage(
     onGlassSurfaceChange: (Boolean) -> Unit = {},
     reduceMotion: Boolean = false,
     onReduceMotionChange: (Boolean) -> Unit = {},
+    killAfterLaunch: Boolean = false,
+    onKillAfterLaunchChange: (Boolean) -> Unit = {},
+    hapticIntensity: HapticIntensity = HapticIntensity.WEAK,
+    onHapticIntensityChange: (HapticIntensity) -> Unit = {},
     focusedRow: Int = -1,
     onFocusedRowChange: (Int) -> Unit = {},
     listState: androidx.compose.foundation.lazy.LazyListState =
@@ -264,22 +277,23 @@ fun SettingsPage(
     onAboutClick: () -> Unit = {}
 ) {
     val deviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+    val ctx = LocalContext.current
 
     // ── 设置项模型 ─────────────────────────────────────────
     // 全部统一为"单行可聚焦"模型：每个项的 index 就是 focusableRow。
     // darkMode / sortMode / orientation 全部走 DropdownDialog 交互。
     val aboutClick by rememberUpdatedState(onAboutClick)
     val items = remember(
-        darkMode, sortMode, orientationMode, useMonet, showBadges,
+        darkMode, sortMode, orientationMode, useMonet, showBadges, hapticIntensity,
         wallpaperBehind, cutoutAdapt, showSystemApps, dynamicBackground,
-        glassSurface, reduceMotion, isScanning
+        glassSurface, reduceMotion, killAfterLaunch, isScanning
     ) {
         mutableListOf<SettingItem>().apply {
             // ─ 外观 ─
             add(SettingItem.Section("外观"))
             add(SettingItem.Dropdown(
                 label = "深色模式",
-                desc = "跟随系统 / 浅色 / 深色 / AMOLED 纯黑",
+                desc = "选择界面明暗主题",
                 icon = Icons.Filled.DarkMode,
                 value = darkMode,
                 options = DarkMode.entries.toList(),
@@ -288,7 +302,7 @@ fun SettingsPage(
             ))
             add(SettingItem.Dropdown(
                 label = "强制旋屏",
-                desc = "保持 Reverie 自身方向锁定；系统级全局锁定需悬浮窗权限（可选）",
+                desc = "锁定应用自身方向",
                 icon = Icons.Filled.ScreenRotation,
                 value = orientationMode,
                 options = OrientationMode.SELECTOR_ORDER,
@@ -297,25 +311,25 @@ fun SettingsPage(
             ))
             add(SettingItem.Switch(
                 label = "莫奈取色（跟随壁纸）",
-                desc = "从系统壁纸提取色板；关闭后使用 Reverie 自定义配色",
+                desc = "从壁纸提取主色板",
                 icon = Icons.Filled.Palette,
                 checked = useMonet, onChange = onUseMonetChange
             ))
             add(SettingItem.Switch(
                 label = "显示应用角标",
-                desc = "未读通知数",
+                desc = "显示未读通知数量",
                 icon = Icons.Filled.Notifications,
                 checked = showBadges, onChange = onShowBadgesChange
             ))
             add(SettingItem.Switch(
                 label = "穿透背景（显示桌面壁纸）",
-                desc = "开启后主界面以系统默认壁纸作为背景",
+                desc = "主界面显示桌面壁纸",
                 icon = Icons.Filled.Wallpaper,
                 checked = wallpaperBehind, onChange = onWallpaperBehindChange
             ))
             add(SettingItem.Switch(
                 label = "挖孔屏适配",
-                desc = "开启：关键内容绕开前置摄像头；关闭：内容铺满延伸至挖孔区（全屏）",
+                desc = "内容绕开摄像头孔",
                 icon = Icons.Filled.Security,
                 checked = cutoutAdapt, onChange = onCutoutAdaptChange
             ))
@@ -324,46 +338,43 @@ fun SettingsPage(
             add(SettingItem.Section("动效"))
             add(SettingItem.Switch(
                 label = "动态氛围背景",
-                desc = "缓慢漂移的柔光渐变；关闭后退回静态渐变",
+                desc = "底层缓动柔光渐变",
                 icon = Icons.Filled.Gradient,
-                checked = dynamicBackground, onChange = onDynamicBackgroundChange,
-                infoTitle = "动态氛围背景",
-                infoText = "在主界面底层渲染一层缓慢漂移的柔光渐变，营造氛围感。" +
-                        "关闭后退回静态纯色渐变，可显著降低 GPU 负载与耗电。" +
-                        "该效果为循环动画，遵循系统「减少动态效果」设置。"
+                checked = dynamicBackground, onChange = onDynamicBackgroundChange
             ))
             add(SettingItem.Switch(
                 label = "玻璃拟态",
-                desc = "磨砂玻璃景深与高光描边，让前景浮于背景之上",
+                desc = "磨砂玻璃景深质感",
                 icon = Icons.Filled.Wallpaper,
-                checked = glassSurface, onChange = onGlassSurfaceChange,
-                infoTitle = "玻璃拟态",
-                infoText = "为卡片、面板叠加磨砂玻璃质感的景深与高光描边，" +
-                        "让前景内容浮于背景之上。关闭后改为纯色表面，" +
-                        "视觉更扁平、性能开销更低。"
+                checked = glassSurface, onChange = onGlassSurfaceChange
             ))
             add(SettingItem.Switch(
                 label = "减少动态效果",
-                desc = "开启后冻结呼吸光晕/漂移等循环动画（晕动症与低性能设备友好）",
+                desc = "冻结循环动画效果",
                 icon = Icons.Filled.MotionPhotosOff,
-                checked = reduceMotion, onChange = onReduceMotionChange,
-                infoTitle = "减少动态效果",
-                infoText = "开启后将冻结呼吸光晕、背景漂移、图标按压缩放等所有循环动画，" +
-                        "仅保留必要的过渡与即时反馈。适合晕动症用户，" +
-                        "或在低性能设备上提升流畅度。该设置会与系统「省电模式」叠加生效。"
+                checked = reduceMotion, onChange = onReduceMotionChange
+            ))
+            add(SettingItem.Dropdown(
+                label = "震动触感强度",
+                desc = "手柄操作震动反馈",
+                icon = Icons.Filled.Vibration,
+                value = hapticIntensity,
+                options = HapticIntensity.entries,
+                optionLabel = { (it as HapticIntensity).label },
+                onSelect = { onHapticIntensityChange(it as HapticIntensity) }
             ))
 
             // ─ 应用列表 ─
             add(SettingItem.Section("应用列表"))
             add(SettingItem.Switch(
                 label = "显示系统应用",
-                desc = "开启后主列表额外包含系统应用（设置、系统服务等）",
+                desc = "包含系统预装应用",
                 icon = Icons.Filled.Apps,
                 checked = showSystemApps, onChange = onShowSystemAppsChange
             ))
             add(SettingItem.Dropdown(
                 label = "排序方式",
-                desc = "应用到主列表的所有应用",
+                desc = "选择列表排序规则",
                 icon = Icons.Filled.Sort,
                 value = sortMode,
                 options = SortMode.entries.toList(),
@@ -372,7 +383,7 @@ fun SettingsPage(
             ))
             add(SettingItem.Button(
                 label = "导出应用列表",
-                desc = "导出 应用名/包名/安装来源/分类 到下载目录，供 AI 填充分类",
+                desc = "生成分类映射文件",
                 icon = Icons.Filled.FileDownload,
                 onClick = onExportCategories,
                 infoTitle = "导出 / 导入分类映射",
@@ -386,31 +397,75 @@ fun SettingsPage(
             ))
             add(SettingItem.Button(
                 label = "导入分类映射",
-                desc = "读取下载目录 reverie_categories.json 中 AI 回填的分类",
+                desc = "读取 AI 分类文件",
                 icon = Icons.Filled.FileUpload,
                 onClick = onImportCategories
             ))
             add(SettingItem.Button(
                 label = "清除分类映射",
-                desc = "清空 AI 分类覆盖，恢复系统原始分类",
+                desc = "恢复默认分类",
                 icon = Icons.Filled.DeleteSweep,
                 onClick = onClearCategories
+            ))
+
+            // ─ 行为 ─
+            add(SettingItem.Section("行为"))
+            add(SettingItem.Switch(
+                label = "启动游戏后不保留 Reverie 进程",
+                desc = "启动后关闭本应用",
+                icon = Icons.Filled.ExitToApp,
+                checked = killAfterLaunch, onChange = onKillAfterLaunchChange
             ))
 
             // ─ 工具 ─
             add(SettingItem.Section("工具"))
             add(SettingItem.Button(
                 label = if (isScanning) "扫描中…" else "重新扫描",
-                desc = "重新枚举已安装应用列表",
+                desc = "重新枚举已装应用",
                 icon = Icons.Filled.Refresh,
                 onClick = onRescan
             ))
             add(SettingItem.Button(
                 label = "权限管理",
-                desc = "电池优化、自启动、悬浮窗、使用情况访问、通知角标等",
+                desc = "前往系统管理权限",
                 icon = Icons.Filled.Security,
                 onClick = onManagePermissions
             ))
+            // 美术调试入口：仅 debug 构建才加入列表（release 签名包自动移除，不再显示该项）。
+            // 通过显式 ComponentName（字面量）启动独立调试窗口，主工程不引用
+            // app/src/debug 任何类，从而保留 src/debug 隔离（删目录/release 不受影响）。
+            if (BuildConfig.DEBUG) {
+                add(SettingItem.Button(
+                    label = "美术调试",
+                    desc = "美术资源诊断窗口",
+                    icon = Icons.Filled.BugReport,
+                    onClick = {
+                        runCatching {
+                            // DebugOverlayActivity 在 manifest 中为 exported=false，
+                            // Android 12+ 不会为「隐式」Intent 匹配未导出组件，会抛
+                            // ActivityNotFoundException 被 runCatching 静默吞掉（点击无反应）。
+                            // 故必须用显式 ComponentName 启动。
+                            val lastPkg = ctx.getSharedPreferences(
+                                "debug_art_overlay",
+                                Context.MODE_PRIVATE
+                            ).getString("last_pkg", "") ?: ""
+                            val intent = Intent().apply {
+                                component = ComponentName(
+                                    "cn.mocabolka.run",
+                                    "cn.mocabolka.run.debug.DebugOverlayActivity"
+                                )
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                if (lastPkg.isNotBlank()) {
+                                    putExtra("cn.mocabolka.run.debug.EXTRA_PKG", lastPkg)
+                                }
+                            }
+                            ctx.startActivity(intent)
+                        }.onFailure {
+                            Log.w("SettingsPage", "打开美术调试窗口失败", it)
+                        }
+                    },
+                ))
+            }
             add(SettingItem.Button(
                 label = "清空全部收藏",
                 desc = "此操作不可撤销",
@@ -424,7 +479,7 @@ fun SettingsPage(
             ))
             add(SettingItem.Button(
                 label = "重置所有设置",
-                desc = "恢复默认外观/排序/显示，并清空收藏",
+                desc = "恢复默认并清收藏",
                 icon = Icons.Filled.SettingsBackupRestore,
                 onClick = onResetSettings,
                 danger = true,
@@ -508,6 +563,7 @@ fun SettingsPage(
         controlBridge.value = SettingsControlBridge(
             openDropdownRow = row,
             onMove = { dir ->
+                Haptics.tick()
                 val idx = focusableIndices.getOrNull(row) ?: return@SettingsControlBridge
                 val item = items[idx] as? SettingItem.Dropdown ?: return@SettingsControlBridge
                 // 从桥读取最新选中索引，避免 SideEffect 闭包 stale 问题
@@ -517,6 +573,7 @@ fun SettingsPage(
                 )
             },
             onConfirm = {
+                Haptics.click()
                 val idx = focusableIndices.getOrNull(row) ?: return@SettingsControlBridge
                 val item = items[idx] as? SettingItem.Dropdown ?: return@SettingsControlBridge
                 // 从桥读取最新选中索引，避免 SideEffect 闭包 stale 问题
@@ -525,9 +582,11 @@ fun SettingsPage(
                 controlBridge.value = controlBridge.value.copy(openDropdownRow = -1)
             },
             onDismiss = {
+                Haptics.click()
                 controlBridge.value = controlBridge.value.copy(openDropdownRow = -1)
             },
             onActivate = { activateRow ->
+                Haptics.click()
                 val idx = focusableIndices.getOrNull(activateRow) ?: return@SettingsControlBridge
                 when (val item = items[idx]) {
                     is SettingItem.Switch -> if (!item.disabled) item.onChange(!item.checked)
@@ -553,6 +612,23 @@ fun SettingsPage(
                     else -> {}
                 }
             },
+            onCycle = { cycleRow ->
+                run {
+                    val idx = focusableIndices.getOrNull(cycleRow) ?: return@run false
+                    val item = items[idx] as? SettingItem.Dropdown ?: return@run false
+                    if (item.options.isEmpty()) return@run false
+                    // 直接循环切换到下一项（向下），到末尾回到首项，形成闭环，无需进入子菜单。
+                    val cur = item.options.indexOf(item.value).coerceAtLeast(0)
+                    val next = (cur + 1) % item.options.size
+                    item.options.getOrNull(next)?.let { item.onSelect(it) }
+                    Haptics.tick()
+                    true
+                }
+            },
+            isDropdownRow = { row ->
+                val idx = focusableIndices.getOrNull(row) ?: -1
+                items.getOrNull(idx) is SettingItem.Dropdown
+            },
             hasOpenDialog = row >= 0 ||
                 bridge.pendingConfirm != null ||
                 bridge.pendingInfo != null,
@@ -575,8 +651,12 @@ fun SettingsPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            // 顶部呼吸由 StatusBar 统一提供（Dimens.HeaderToContent）；
-            // 底部完全贴边（列表末项滚动留白由内部 LazyColumn.contentPadding 控制）。
+            // 边缘安全边距（挖孔避让 / 瀑布屏）由外层 HomeScreen 主内容列统一提供
+            // （EdgeToEdge.kt::setupEdgeToEdgeImmersive 设 ALWAYS + Waterfall.kt::edgeSafePadding）。
+            // 此处【不可】再叠加 edgeSafePadding：横屏挖孔屏适配开启时会重复内缩一份 cutout
+            // 安全区，导致列表项宽度被多扣、无法铺满「挖孔屏以外剩余区域全宽」（HOME/SEARCH/STATS
+            // 各 Tab 仅用 ContentHorizontal，故设置页原来是唯一被二次内缩的页）。
+            // 仅保留内容级水平留白 ContentHorizontal(16dp)，与主页其它 Tab 完全一致。
             .padding(start = Dimens.ContentHorizontal, top = 0.dp, end = Dimens.ContentHorizontal)
     ) {
         // 注：页面标题（"设置"）已上移至此栏 StatusBar 的页标题位，避免与子页面标题
@@ -692,7 +772,18 @@ fun SettingsPage(
                                 dropdownOptionLabel = item.optionLabel,
                                 dropdownOnSelect = item.onSelect
                             )
-                        }
+                        },
+                        onInfo = if (item.infoTitle.isNotBlank()) {
+                            {
+                                controlBridge.value = controlBridge.value.copy(
+                                    pendingInfo = InfoContent(
+                                        title = item.infoTitle,
+                                        text = item.infoText,
+                                        imageRes = item.imageRes
+                                    )
+                                )
+                            }
+                        } else null
                     )
                     is SettingItem.Info -> InfoListItem(
                         label = item.label,
@@ -973,7 +1064,8 @@ private fun DropdownListItem(
     expanded: Boolean,
     focusRequester: FocusRequester,
     onFocus: () -> Unit,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    onInfo: (() -> Unit)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     // 手柄未连接时隐藏所有焦点框（expanded 态保持，因为是 UI 状态而非焦点）
@@ -1033,6 +1125,20 @@ private fun DropdownListItem(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    // 手柄专属：聚焦下拉菜单行时显示「按X切换」提示，与底部提示栏一致，
+                    // 引导用户无需进子菜单即可用 X 键循环切换（学习 info dialog 的键位提示范式）。
+                    if (focused) Hint(KeyToken.X, "切换")
+                    if (onInfo != null) {
+                        // 信息说明按钮：点击打开 InfoDialog（该说明不含在 X 循环切换内，
+                        // X 键已专属用于循环切换，详细解释走此 ⓘ 按钮）。
+                        ReverieIconButton(
+                            onClick = onInfo,
+                            imageVector = Icons.Filled.Info,
+                            contentDescription = "说明",
+                            focused = focused,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     Icon(
                         Icons.Filled.ChevronRight, contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1096,7 +1202,9 @@ fun DropdownDialog(
     onSelect: (Any) -> Unit,
     onDismiss: () -> Unit,
     /** 列表滚动状态：由调用方持有，便于右摇杆自由滚动超长列表。 */
-    listState: LazyListState = rememberLazyListState()
+    listState: LazyListState = rememberLazyListState(),
+    /** 挖孔屏适配开关：透传 DialogScaffold 底部提示栏安全边距。 */
+    cutoutAdapt: Boolean = false
 ) {
     // 手柄未连接时隐藏选中项的高亮边框/背景（保留 check 图标+粗体作为选中标识）
     val showFocus = LocalShowFocusIndicators.current
@@ -1106,6 +1214,7 @@ fun DropdownDialog(
     }
     DialogScaffold(
         onDismiss = onDismiss,
+        cutoutAdapt = cutoutAdapt,
         bottomHintContent = {
             Hint(KeyToken.A, "确认")
             Hint(KeyToken.B, "关闭")
@@ -1159,7 +1268,8 @@ fun DropdownDialog(
                             .padding(end = if (options.size > 6) 10.dp else 0.dp),
                         verticalArrangement = Arrangement.spacedBy(Dimens.xxs)
                     ) {
-                        itemsIndexed(options) { i, opt ->
+                        // 复合 key（文案#序号）：既保证稳定性，又彻底杜绝未来文案重复导致的运行时崩溃
+                        itemsIndexed(options, key = { i, opt -> "${optionLabel(opt)}#$i" }) { i, opt ->
                             val isHighlighted = i == selectedIndex
                             DropdownMenuItem(
                                 text = {
@@ -1251,13 +1361,16 @@ fun ConfirmDialog(
     title: String,
     text: String,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** 挖孔屏适配开关：透传 DialogScaffold 底部提示栏安全边距。 */
+    cutoutAdapt: Boolean = false
 ) {
     // 与 DropdownDialog / InfoDialog 统一：全屏遮罩（ScrimAlpha）+ 居中 Surface
     // indication=null 屏蔽遮罩长按水波纹触控动画（不影响入场退场与手柄焦点）。
     val scrimInteractionSource = remember { MutableInteractionSource() }
     DialogScaffold(
         onDismiss = onDismiss,
+        cutoutAdapt = cutoutAdapt,
         bottomHintContent = {
             Hint(KeyToken.A, "确认")
             Hint(KeyToken.B, "关闭")
@@ -1394,7 +1507,7 @@ fun InfoDialog(
                             // 说明图（提示卡片样式）
                             Surface(
                                 shape = MaterialTheme.shapes.medium,
-                                color = SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle),
+                                color = SurfaceTokens.cardSurfaceGlassAware(SurfaceTokens.CardLevel.Subtle),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Image(

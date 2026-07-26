@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,6 +45,9 @@ import kotlinx.coroutines.delay
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
+/** 状态栏日期格式（文件级单例，pattern 只解析一次）。 */
+private val DateFormatterCn: DateTimeFormatter = DateTimeFormatter.ofPattern("M月d日 EEEE")
+
 /**
  * 桌面顶部状态栏：问候 + 日期（左侧） | 四选一滑块：主页/统计/搜索/设置（右侧）。
  *
@@ -79,7 +81,8 @@ fun StatusBar(
     }
 
     // C1-3：用 derivedStateOf 将日期计算与重组解耦，仅在 now 的实际字段变化时派生。
-    val dateText: State<String> = remember { derivedStateOf { now.format(DateTimeFormatter.ofPattern("M月d日 EEEE")) } }
+    // formatter 提取为文件级常量，避免每次派生都重新解析 pattern
+    val dateText: State<String> = remember { derivedStateOf { now.format(DateFormatterCn) } }
 
     val tabs = listOf(
         QuadTab("", Icons.Default.Home, homeTab),
@@ -182,10 +185,11 @@ private fun QuadTabSlider(
                         val currentIdx = tabs.indexOfFirst { it.tabValue == currentTab }
                         if (currentIdx < 0) return@detectHorizontalDragGestures
                         val threshold = 30f
+                        // onTabChange 本身接受 Any?，无需 !!（tabValue 为 null 时不切换）
                         if (dragAmount > threshold && currentIdx < totalTabs - 1) {
-                            onTabChange(tabs[currentIdx + 1].tabValue!!)
+                            tabs[currentIdx + 1].tabValue?.let(onTabChange)
                         } else if (dragAmount < -threshold && currentIdx > 0) {
-                            onTabChange(tabs[currentIdx - 1].tabValue!!)
+                            tabs[currentIdx - 1].tabValue?.let(onTabChange)
                         }
                     }
                 )
@@ -216,7 +220,7 @@ private fun QuadTabSlider(
                 } else {
                     Text(
                         text = tab.label,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp),
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (selected) MaterialTheme.colorScheme.primary
                                 else SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),

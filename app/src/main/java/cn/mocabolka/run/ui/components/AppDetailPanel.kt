@@ -18,9 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,8 +68,10 @@ import kotlinx.coroutines.delay
 import cn.mocabolka.run.launcher.AppModel
 import cn.mocabolka.run.launcher.relativeLastUsed
 import cn.mocabolka.run.ui.theme.Dimens
+import cn.mocabolka.run.ui.theme.LocalGlassEnabled
 import cn.mocabolka.run.ui.theme.LocalShowFocusIndicators
 import cn.mocabolka.run.ui.theme.SurfaceTokens
+import cn.mocabolka.run.ui.theme.glassHighlight
 import cn.mocabolka.run.ui.theme.FavoriteStar
 import cn.mocabolka.run.ui.theme.focusBorder
 import cn.mocabolka.run.ui.components.KeyBadge
@@ -109,8 +109,6 @@ fun AppDetailPanel(
     todayUsage: Long = 0L,
     /** 本周使用时长（ms），用于对比进度条（R11-1）。 */
     weeklyUsage: Long = 0L,
-    /** 玻璃拟态：降低表面不透明度并叠加顶部高光，营造磨砂玻璃质感（R12）。 */
-    glass: Boolean = true,
     /** 当前手柄焦点所在的详情面板内按钮索引（-1 = 无；0=启动 / 1=收藏 / 2=信息 / 3=卸载 / 4=强制停止） */
     focusedButtonIndex: Int = -1,
     /** 焦点按钮改变回调（HomeScreen 用于驱动 5 个按钮之间的十字上下移动） */
@@ -139,8 +137,12 @@ fun AppDetailPanel(
     // effectiveFocus 仅当 LocalShowFocusIndicators（=手柄已连接）为真时取 focusedButtonIndex，
     // 否则置 -1，使所有详情按钮 / 启动圆钮的焦点态一律隐藏（A 键位浮块已由 LocalShowFocusIndicators 统一守卫）。
     val effectiveFocus = if (LocalShowFocusIndicators.current) focusedButtonIndex else -1
+    // 玻璃拟态开关：CompositionLocal 静默注入（R12），无需调用方逐层透传
+    val glass = LocalGlassEnabled.current
+    // 三级表面对比：穿透态最透（Overlay 0.22，壁纸磨砂底直接透出）→
+    // 普通玻璃态半透（Subtle 0.30）→ 玻璃关实色 surface
     val surfaceColor = when {
-        glass && wallpaperBehind -> SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle)
+        glass && wallpaperBehind -> SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Overlay)
         glass -> SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle)
         else -> MaterialTheme.colorScheme.surface
     }
@@ -178,9 +180,14 @@ fun AppDetailPanel(
             .background(surfaceColor)
             .border(
                 1.dp,
-                MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                // 玻璃态下边框换更亮的白描边（0.18f）——半透表面上主题 outline 几乎不可见
+                if (glass) Color.White.copy(alpha = 0.18f)
+                else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
                 RoundedCornerShape(Dimens.lg)
             )
+            // 顶部光源反射高光（挂前景卡片；磨砂模糊由 HomeScreen 壁纸层 frosted 承担，
+            // 本容器含文字严禁挂 frosted——Compose 无 backdrop-blur，会把内容糊掉）
+            .glassHighlight(enabled = glass)
             .padding(Dimens.md)
             .focusScrollerContainer(focusScroller)
             .verticalScroll(scrollState),

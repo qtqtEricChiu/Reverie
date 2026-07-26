@@ -1,5 +1,7 @@
 package cn.mocabolka.run.ui
 
+import cn.mocabolka.run.ui.components.statusBarSafeTop
+
 import android.annotation.SuppressLint
 import android.app.WallpaperManager
 import android.content.Intent
@@ -12,18 +14,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
@@ -38,16 +32,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
+
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
+
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -85,7 +82,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.key.onKeyEvent
@@ -117,9 +113,14 @@ import cn.mocabolka.run.gamepad.RightStickScroll
 import cn.mocabolka.run.gamepad.RightStickScrollPhysics
 import cn.mocabolka.run.gamepad.Side
 import cn.mocabolka.run.launcher.AppModel
+import cn.mocabolka.run.util.matchesSearch
+import cn.mocabolka.run.util.pinyinOf
+import cn.mocabolka.run.launcher.isGameLike
 import cn.mocabolka.run.ui.components.AmbientBackground
 import cn.mocabolka.run.ui.components.AppDetailPanel
 import cn.mocabolka.run.ui.components.AppListItem
+import cn.mocabolka.run.ui.game.GameArtResolver
+import cn.mocabolka.run.ui.game.GamePageActivity
 import cn.mocabolka.run.ui.components.DropdownDialog
 import cn.mocabolka.run.ui.components.GamepadBottomHintBar
 import cn.mocabolka.run.ui.components.GamepadVisible
@@ -130,6 +131,10 @@ import cn.mocabolka.run.ui.components.KeyBadge
 import cn.mocabolka.run.ui.components.KeyToken
 import cn.mocabolka.run.ui.components.LaunchOverlay
 import cn.mocabolka.run.ui.components.NativeDatePickerDialog
+import cn.mocabolka.run.ui.components.StatsPeriod
+import cn.mocabolka.run.ui.components.StatsControlBridge
+import cn.mocabolka.run.ui.components.StatsOverviewSlot
+import cn.mocabolka.run.ui.components.ReveriePeriodPickerDialog
 import cn.mocabolka.run.ui.components.ReverieFilledButton
 import cn.mocabolka.run.ui.components.SettingsConfirm
 import cn.mocabolka.run.ui.components.SettingsControlBridge
@@ -139,13 +144,16 @@ import cn.mocabolka.run.ui.components.StatusBar
 import cn.mocabolka.run.ui.components.wrapFocusBorder
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
+import cn.mocabolka.run.ui.theme.MotionMachines
 import cn.mocabolka.run.ui.theme.MotionSpec
 import cn.mocabolka.run.ui.theme.ReverieToast
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 import cn.mocabolka.run.ui.theme.focusBorder
-import cn.mocabolka.run.ui.theme.waterfallSafePadding
+import cn.mocabolka.run.ui.theme.frosted
+import cn.mocabolka.run.ui.theme.edgeSafePadding
 import cn.mocabolka.run.viewmodel.HomeViewModel
 import cn.mocabolka.run.viewmodel.SortMode
+import cn.mocabolka.run.BuildConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -187,6 +195,7 @@ fun HomeScreen(
     val showOverlay by viewModel.showOverlay.collectAsState()
     val badges by viewModel.badges.collectAsState()
     val showBadges by viewModel.settings.showBadgesFlow.collectAsState()
+    val hapticIntensity by viewModel.settings.hapticIntensity.collectAsState()
     val badgeOf: (String) -> Int = { pkg -> if (showBadges) badges[pkg] ?: 0 else 0 }
     val categoryCounts by viewModel.categoryCounts.collectAsState()
     // R13：预聚合用量 Map（主列表/详情 O(1) 查表，避免逐行全量扫描）
@@ -203,6 +212,8 @@ fun HomeScreen(
     val dynamicBackground by viewModel.settings.dynamicBackgroundFlow.collectAsState()
     val glassSurface by viewModel.settings.glassSurfaceFlow.collectAsState()
     val reduceMotion by viewModel.settings.reduceMotionFlow.collectAsState()
+    // 行为设置：启动游戏后不保留 Reverie 进程
+    val killAfterLaunch by viewModel.settings.killAfterLaunchFlow.collectAsState()
     // 挖孔屏适配开关（响应式）：控制主体是否加 displayCutout padding 绕开摄像头；
     // 必须 collectAsState，否则切换开关后 HomeScreen 主体 padding 不重组，表现为"开关用不了"。
     val cutoutAdapt by viewModel.settings.cutoutAdaptFlow.collectAsState()
@@ -210,7 +221,7 @@ fun HomeScreen(
     val effectiveReduceMotion by viewModel.settings.reduceMotionFlow.collectAsState()
     // 动效开关直接使用用户设置值（节能模式已移除，不再聚合）
     val effectiveDynamicBackground = dynamicBackground
-    val effectiveGlass = glassSurface
+    // 玻璃拟态开关不再逐层透传：经 LandscapeTheme 注入 LocalGlassEnabled，组件各自读取
     // R13：应用可见性（Lifecycle 驱动），用于暂停氛围背景等空闲动画以省电
     val appVisible by rememberAppVisible()
     // 强制旋屏模式（全局生效，由 OrientationLockService 前台服务维持）
@@ -235,12 +246,23 @@ fun HomeScreen(
     // Compose 1.8+ 推荐使用 LocalWindowInfo.containerSize 替代 Configuration.screenWidthDp
     val isWideScreen = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() >= 720.dp }
 
-    // 手柄连接状态：用于控制上下文键位角标（LB/RB/X/Menu）的显隐
-    val gamepadConnected by GamepadDetector.gamepadConnectedFlow(context)
-        .collectAsState(initial = GamepadDetector.isGamepadConnected())
+    // 手柄连接状态：用于控制上下文键位角标（LB/RB/X/Menu）的显隐；remember 防重组时重复订阅
+    // P1-1：手柄连接状态统一取 HomeViewModel 单一可信源（消除 LandscapeTheme 内独立 collectAsState 的时序空洞）
+    val gamepadConnected by viewModel.gamepadConnected.collectAsState()
 
     // 顶部 Tab 模式：主界面 / 设置 平行切换，不再是浮层
-    var currentTab by remember { mutableStateOf(MainTab.HOME) }
+    // 冷启动恢复：优先用持久化的 lastMainTab，让用户回到离开前所在页面，
+    // 而非每次被重置到 HOME（进程被系统回收后尤其明显）。解析失败回退 HOME。
+    var currentTab by remember {
+        mutableStateOf(
+            runCatching { MainTab.valueOf(viewModel.settings.lastMainTab) }
+                .getOrDefault(MainTab.HOME)
+        )
+    }
+    // 切换 Tab 时持久化，供下次冷启动恢复（解决"回应用被重置到首页"）。
+    LaunchedEffect(currentTab) {
+        viewModel.settings.lastMainTab = currentTab.name
+    }
     // 统计页排行 LazyColumn 滚动状态（右摇杆 / 焦点滚动统一驱动）
     val statsListState = rememberLazyListState()
     // 统计页左栏（总计/图表）滚动状态：宽屏双栏时由右摇杆驱动滚动（任务 14/15）
@@ -256,23 +278,44 @@ fun HomeScreen(
     }
     // 统计页焦点侧：跨栏逻辑已移除（2026-07-13），统计页恒用 LEFT_LIST 语义
     // （左栏=应用排行由左摇杆焦点驱动；右栏=总览总计由右摇杆滚动，互不越界）。
-    // 此变量保留仅为兼容既有声明，导航逻辑恒走 LEFT_LIST 分支。
+    // 手柄全链路重构：statsFocusSide 升级为统计页"焦点区"载体——
+    //   LEFT_LIST  = RANK（左栏应用排行）；RIGHT_PANEL = OVERVIEW（右栏总览控件区）。
+    //   宽屏 LEFT/RIGHT 切区、窄屏 UP/DOWN 链式贯通（见 Navigate STATS 分支状态机）。
     var statsFocusSide by remember { mutableStateOf(FocusSide.LEFT_LIST) }
     // 任务 16：统计页排行列表焦点索引（左摇杆上下移动焦点）
     var statsFocusIndex by remember { mutableStateOf(0) }
+    // 手柄全链路重构：OVERVIEW 区当前聚焦控件槽（0=周期/1=日期/2=视图/3=指标，见 StatsOverviewSlot）。
+    var statsOverviewIndex by remember { mutableStateOf(0) }
+    // 手柄全链路重构：统计页控件桥——StatsScreen 注册切视图/切指标能力与可聚焦控件数，A 键据此分发。
+    val statsControl = remember { StatsControlBridge() }
+    // P1-2：统计页当前聚焦排行项包名（供 A 键启动，消除功能死区）
+    var statsFocusedPackage by remember { mutableStateOf<String?>(null) }
+    // 统计页焦点→滚动跟随的首帧抑制标志（P0-1）：进入统计页时不自动滚动定位，仅用户导航时跟随。
+    var statsAutoScrollSuppressed by remember { mutableStateOf(true) }
     // 统计页实际排行条目数（由 StatsScreen 上报），用于限制焦点上限避免空行焦点
     var statsEntryCount by remember { mutableStateOf(20) }
     // 切换到 STATS Tab 时重置焦点侧 / 焦点到左栏首项
     LaunchedEffect(currentTab) {
         if (currentTab == MainTab.STATS) {
+            // 进页默认落 RANK 区首项（保留既有肌肉记忆与"从顶部总览看"约束：首帧抑制滚动）。
             statsFocusSide = FocusSide.LEFT_LIST
             statsFocusIndex = 0
+            statsOverviewIndex = 0
+            statsAutoScrollSuppressed = true
         }
-        // 进入 / 离开 SEARCH Tab 时同步搜索模式标志（供 MainActivity 接管手柄导航），不清词
+        // 进入 / 离开 SEARCH Tab 时同步搜索模式标志（供 MainActivity 接管手柄导航），不清词。
+        // 进入搜索后的焦点复位（focusSide→LEFT_LIST / searchFocusTarget→LIST）由内层
+        // LaunchedEffect(searchActive) 统一处理（该作用域才持有 focusSide 等状态）。
         viewModel.setSearchActive(currentTab == MainTab.SEARCH)
     }
-    // 切换统计周期时排行内容已变，焦点归零
-    LaunchedEffect(statsPeriod) { statsFocusIndex = 0 }
+    // P0-1：统计页焦点→窗口自动滚动跟随。进入统计页首帧抑制（已在上面置位），
+    // 之后左摇杆导航改变 statsFocusIndex 时，列表滚动到当前焦点项，使焦点框始终可见。
+    LaunchedEffect(statsFocusIndex) {
+        if (statsAutoScrollSuppressed) { statsAutoScrollSuppressed = false; return@LaunchedEffect }
+        statsListState.animateScrollToItem(statsFocusIndex)
+    }
+    // 注意：切换统计周期不再强制焦点归零到排行首项（需求 #1——移除所有定位到应用排行的逻辑，
+    // 避免日周月年切换后自动跳转排行、以及进入统计页时的卡顿定位）。焦点由手柄方向键自然驱动并按条目数夹紧。
     // 当前 Tab 可变引用：右摇杆滚动引擎在 LaunchedEffect(Unit) 中捕获首帧值会过期
     val currentTabRef = remember { mutableStateOf(currentTab) }
     LaunchedEffect(currentTab) { currentTabRef.value = currentTab }
@@ -357,6 +400,24 @@ fun HomeScreen(
         }
     }
 
+    // 游戏专属页面（参考 Steam 大屏幕「游戏库 → 游戏」）：独立 Activity（GamePageActivity），
+    // 仅主页进入。入口：手柄 A / 键盘 Enter / 左摇杆按压 在应用列表行（游戏类或已注册美术资源）
+    // → 启动 GamePageActivity；触控直接点击该行 → 同上。替代原「聚焦右栏」按键事件。
+    val gameArtResolver = remember { GameArtResolver(context) }
+    /** 是否对该应用打开游戏专属页面：游戏类 / 分类映射为游戏 / 白名单，或已注册美术资源。 */
+    fun shouldOpenGamePage(app: AppModel?): Boolean =
+        app != null && (isGameLike(app) || gameArtResolver.hasArt(app.packageName, app.label))
+    fun openGamePage(app: AppModel) {
+        haptics.click()
+        // 竖屏防御：进入游戏子页前收起竖屏详情浮层，避免误触发应用详情（仅游戏类走此入口）。
+        portraitDrawerOpen = false
+        context.startActivity(
+            Intent(context, GamePageActivity::class.java).apply {
+                putExtra(GamePageActivity.EXTRA_PACKAGE, app.packageName)
+            }
+        )
+    }
+
     val allListState = rememberLazyListState()
     val featuredListState = rememberLazyListState()
     val recentsListState = rememberLazyListState()
@@ -368,24 +429,28 @@ fun HomeScreen(
     // 搜索结果：始终在【全部应用】中匹配关键字，忽略主页当前分类筛选。
     // 与 visibleList 解耦，确保搜索页范围恒定（用户要求）。
     // 排序规则：前缀匹配 > 标签包含匹配 > 包名匹配，最相关的结果在前。
+    // 拼音搜索：全拼/首字母命中也参与匹配与排序（用户需求：搜"设置"可输"sz"/"she…"）。
     val searchResults = remember(apps, query) {
         if (query.isBlank()) {
             // 空搜索词显示全部应用（按已有排序）
             apps
         } else {
             val q = query.lowercase()
-            val matched = apps.filter {
-                it.label.contains(q, ignoreCase = true) ||
-                    it.packageName.contains(q, ignoreCase = true) ||
-                    it.categoryText.contains(q, ignoreCase = true)
-            }
+            val matched = apps.filter { it.matchesSearch(q) }
             // 按相关性排序：前缀匹配优先
             matched.sortedByDescending { app ->
                 val label = app.label.lowercase()
+                val py = pinyinOf(app.label)
                 when {
                     label == q -> 100
                     label.startsWith(q) -> 80
+                    py.full == q -> 78
+                    py.full.startsWith(q) -> 76
+                    py.initials == q -> 74
+                    py.initials.startsWith(q) -> 72
                     label.contains(q) -> 60
+                    py.full.contains(q) -> 55
+                    py.initials.contains(q) -> 50
                     app.packageName.lowercase().contains(q) -> 40
                     app.categoryText.lowercase().contains(q) -> 20
                     else -> 0
@@ -396,7 +461,7 @@ fun HomeScreen(
     // 搜索页独立焦点包名：与主页 _focusedPackage 完全隔离，避免两页焦点互相串扰。
     // 进入搜索页 / 搜索词变化时重置到结果首项，确保默认（空词）场景也有明确焦点可手柄导航。
     var searchFocusedPackage by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(currentTab, query) {
+    LaunchedEffect(currentTab, query, searchActive) {
         if (currentTab == MainTab.SEARCH) {
             searchFocusedPackage = searchResults.firstOrNull()?.packageName
         }
@@ -443,14 +508,8 @@ fun HomeScreen(
         if (i >= 0) scope.launch { currentListState.animateScrollToItem(i) }
     }
 
-    // 归一化：统计页左栏排行焦点跟随滚动（需求5）。
-    // 左摇杆上下移动 statsFocusIndex 后，必须把排行项滚动到可视区，
-    // 否则焦点移出排行列表窗口（与详情面板同一类 bug）。
-    LaunchedEffect(statsFocusIndex, currentTab) {
-        if (currentTab == MainTab.STATS) {
-            scope.launch { statsListState.animateScrollToItem(statsFocusIndex) }
-        }
-    }
+    // 已移除统计页「排行焦点跟随滚动」的 LaunchedEffect（statsListState.animateScrollToItem）。
+    // 用户明确要求：统计页打开后从最顶上（总览）开始看，禁止任何自动滚动定位到应用排行。
 
     LaunchedEffect(selectedCategory, query) {
         if (visibleList.isNotEmpty()) {
@@ -500,6 +559,8 @@ fun HomeScreen(
                                 val dir = if (event.side == Side.LEFT) -1 else 1
                                 statsDatePickerBridge.value.onPage(dir)
                             }
+                            // X 键：回到本期（本周/本月/本年），并立即刷新预览。
+                            is GamepadEvent.Favorite -> statsDatePickerBridge.value.jumpToAnchor()
                             else -> { /* 其它按键在 dialog 打开时不处理 */ }
                         }
                         return@collectLatest
@@ -598,21 +659,55 @@ fun HomeScreen(
                     haptics.tick()
                     when (currentTab) {
                         MainTab.STATS -> {
-                            // 统计页（重构）：左栏=应用排行、右栏=总览总计。
-                            // 跨栏逻辑已移除：左右栏由各自摇杆独立驱动，方向键只作用于左栏(排行)焦点。
-                            // - 左栏(排行)：上下移动排行焦点（statsFocusIndex），左右 no-op。
-                            // - 右栏(总计)：方向键 no-op（滚动由右摇杆负责）。
+                            // 统计页手柄焦点状态机（手柄全链路重构）：二维寻址消除"整体UI按钮点不了"死区。
+                            //  RANK(LEFT_LIST)  = 左栏应用排行（既有：左摇杆上下移动焦点、A 启动）。
+                            //  OVERVIEW(RIGHT_PANEL) = 右栏总览控件（周期/日期/视图/指标），此前手柄不可达。
+                            // 宽屏(双栏)：LEFT/RIGHT 切区，UP/DOWN 区内遍历。
+                            // 窄屏(单栏)：UP/DOWN 纵向链式贯通——总览控件在上、排行在下，末槽↔排行首项互通。
+                            val slotCount = statsControl.overviewSlotCount.coerceAtLeast(1)
+                            val maxRank = (statsEntryCount - 1).coerceAtLeast(0)
                             if (statsFocusSide == FocusSide.LEFT_LIST) {
-                                // 左栏=应用排行：左摇杆上下移动焦点
                                 when (event.direction) {
-                                    Direction.UP -> statsFocusIndex = (statsFocusIndex - 1).coerceAtLeast(0)
-                                    Direction.DOWN -> statsFocusIndex =
-                                        (statsFocusIndex + 1).coerceAtMost((statsEntryCount - 1).coerceAtLeast(0))
-                                    else -> { /* 排行左右无语义 */ }
+                                    Direction.UP -> {
+                                        if (statsFocusIndex > 0) {
+                                            statsFocusIndex -= 1
+                                        } else if (!isWideScreen) {
+                                            // 窄屏：排行顶部再上拨 → 进入总览控件区末槽
+                                            statsFocusSide = FocusSide.RIGHT_PANEL
+                                            statsOverviewIndex = slotCount - 1
+                                        }
+                                    }
+                                    Direction.DOWN -> statsFocusIndex = (statsFocusIndex + 1).coerceAtMost(maxRank)
+                                    Direction.RIGHT -> {
+                                        // 宽屏：右拨切到右栏总览控件区（进入首槽）
+                                        if (isWideScreen) {
+                                            statsFocusSide = FocusSide.RIGHT_PANEL
+                                            statsOverviewIndex = 0
+                                        }
+                                    }
+                                    else -> { /* LEFT：已在最左栏，no-op */ }
                                 }
                             } else {
-                                // 右栏=总览总计：方向键不移动焦点（滚动归右摇杆）
-                                /* no-op */
+                                when (event.direction) {
+                                    Direction.UP -> {
+                                        if (statsOverviewIndex > 0) statsOverviewIndex -= 1
+                                        // 窄屏顶槽/宽屏顶槽再上拨：保持（不回排行，避免误跳）
+                                    }
+                                    Direction.DOWN -> {
+                                        if (statsOverviewIndex < slotCount - 1) {
+                                            statsOverviewIndex += 1
+                                        } else if (!isWideScreen) {
+                                            // 窄屏：控件末槽再下拨 → 进入排行区首项
+                                            statsFocusSide = FocusSide.LEFT_LIST
+                                            statsFocusIndex = 0
+                                        }
+                                    }
+                                    Direction.LEFT -> {
+                                        // 宽屏：左拨回左栏排行
+                                        if (isWideScreen) statsFocusSide = FocusSide.LEFT_LIST
+                                    }
+                                    else -> { /* RIGHT：已在最右栏，no-op */ }
+                                }
                             }
                         }
                         MainTab.HOME -> {
@@ -657,22 +752,54 @@ fun HomeScreen(
                             }
                         }
                         MainTab.SEARCH -> {
-                            // 搜索页 LIST 态：左摇杆（STICK）穿透控制下方应用列表（上下移动焦点，左右 no-op）。
-                            // INPUT 态时 navigationEnabled=false，导航事件不会到达此处；
-                            // 但为防止焦点状态错乱，仍做兜底：INPUT 态下不移动列表焦点。
-                            if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.LIST && event.source == NavigateSource.STICK) when (event.direction) {
-                                Direction.UP, Direction.DOWN -> {
-                                    val list = searchResults
-                                    if (list.isNotEmpty()) {
-                                        val idx = list.indexOfFirst { it.packageName == searchFocusedPackage }
-                                            .let { if (it < 0) 0 else it }
-                                        val step = if (event.direction == Direction.UP) -1 else 1
-                                        val next = (idx + step).coerceIn(list.indices)
-                                        searchFocusedPackage = list[next].packageName
-                                        scope.launch { searchListState.animateScrollToItem(next) }
+                            // 详情态（与主页一致）：十字键/左摇杆在详情按钮间移动焦点（不移动列表）。
+                            if (focusSide == FocusSide.RIGHT_PANEL) {
+                                when (event.direction) {
+                                    Direction.UP, Direction.DOWN -> {
+                                        focusedDetailButton =
+                                            if (event.direction == Direction.UP)
+                                                (focusedDetailButton - 1).coerceAtLeast(0)
+                                            else (focusedDetailButton + 1).coerceAtMost(DETAIL_BUTTON_COUNT - 1)
+                                    }
+                                    Direction.LEFT, Direction.RIGHT -> {
+                                        focusedDetailButton = when (focusedDetailButton) {
+                                            1 -> 2
+                                            2 -> 1
+                                            else -> focusedDetailButton
+                                        }
                                     }
                                 }
-                                Direction.LEFT, Direction.RIGHT -> { /* 搜索页不响应左右 */ }
+                            } else {
+                                // 列表态 / 输入框态焦点导航（修复左摇杆焦点滚动 Bug）：
+                                // - INPUT 态：仅左摇杆（STICK）任意方向可「焦点贯通」进入列表首项；D-pad 交 IME 处理。
+                                //   此前 INPUT 态只放行 DOWN，UP/LEFT/RIGHT 被输入框态吞掉，用户看着列表推左摇杆却"滚不动"。
+                                // - LIST 态：左摇杆与十字键皆可上下移动焦点（与主页列表态一致），左右 no-op。
+                                if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT) {
+                                    // INPUT 态：先把焦点从输入框释放 + 收起软键盘（MainActivity 据此恢复 navigationEnabled），
+                                    // 之后左摇杆/十字键与 LIST 态统一「上下移焦点」，两种态不冲突（不再只落到首项）。
+                                    viewModel.setSearchFocusTarget(false)
+                                    runCatching { searchTabFocusRequester.freeFocus() }
+                                    val imm = view.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                                    imm?.hideSoftInputFromWindow(view.windowToken, 0)
+                                }
+                                // LIST / INPUT 态统一：左摇杆与十字键皆可上下移动焦点（左右 no-op），与主页列表态归一化。
+                                if (searchResults.isNotEmpty()) {
+                                    val idx = searchResults.indexOfFirst { it.packageName == searchFocusedPackage }
+                                        .let { if (it < 0) 0 else it }
+                                    val step = when (event.direction) {
+                                        Direction.UP -> -1
+                                        Direction.DOWN -> 1
+                                        else -> 0
+                                    }
+                                    if (step != 0) {
+                                        // 计数标题栏（header 节点）已移除：列表首项 UP 不再上移落焦，
+                                        // 仅在范围内移动列表焦点（首项 UP 经 coerceIn 保持不动）。
+                                        val next = (idx + step).coerceIn(searchResults.indices)
+                                        searchFocusedPackage = searchResults[next].packageName
+                                        scope.launch { searchListState.animateScrollToItem(next) }
+                                        haptics.tick()
+                                    }
+                                }
                             }
                         }
                         else -> {
@@ -684,13 +811,55 @@ fun HomeScreen(
                     // 统计页：跨栏已移除，日期按钮不再可聚焦（由 View 键 / 点击打开），
                     // 故 A 在统计页无启动语义，统一 no-op（保留 tick 反馈避免无响应感）。
                     if (currentTab == MainTab.STATS) {
-                        haptics.tick()
-                    } else if (currentTab == MainTab.HOME && focusSide == FocusSide.RIGHT_PANEL) {
-                        // 详情态：A 键首发启动当前 focus 按钮（0=启动）。焦点跟随：
+                        if (statsFocusSide == FocusSide.RIGHT_PANEL) {
+                            // OVERVIEW 区（手柄全链路重构）：A 按当前控件槽分发，
+                            // 让周期/日期/视图/指标控件全部手柄可达——彻底消除"按钮点不了"死区。
+                            haptics.click()
+                            when (statsOverviewIndex) {
+                                StatsOverviewSlot.PERIOD -> {
+                                    val order = cn.mocabolka.run.ui.components.selectableStatsPeriods
+                                    val idx = order.indexOf(statsPeriod).let { if (it < 0) 0 else it }
+                                    statsPeriod = order[(idx + 1) % order.size]
+                                }
+                                StatsOverviewSlot.DATE -> {
+                                    statsDatePickerOpen = true
+                                    setDialogLayer(DialogLayer.STATS_DATE_PICKER)
+                                }
+                                StatsOverviewSlot.VIEW -> statsControl.toggleView()
+                                StatsOverviewSlot.METRIC -> statsControl.toggleMetric()
+                                else -> { /* 槽越界保护 */ }
+                            }
+                        } else {
+                            // RANK 区：A 启动当前聚焦排行项（P1-2）。游戏→游戏页，
+                            // 横屏直接启动，竖屏弹出详情浮窗（与触控 onEntryClick 一致）。
+                            val pkg = statsFocusedPackage
+                            if (pkg != null) {
+                                haptics.click()
+                                val app = viewModel.apps.value.firstOrNull { it.packageName == pkg }
+                                if (app != null) {
+                                    when {
+                                        shouldOpenGamePage(app) -> openGamePage(app)
+                                        isWideScreen -> viewModel.launchApp(app)
+                                        else -> { viewModel.setFocused(pkg); portraitDrawerOpen = true }
+                                    }
+                                }
+                            } else haptics.tick()
+                        }
+                    } else if (focusSide == FocusSide.RIGHT_PANEL && (currentTab == MainTab.HOME || currentTab == MainTab.SEARCH)) {
+                        // 详情态（主页/搜索页共用同一详情面板/浮层）：A 触发当前焦点按钮（0=启动），焦点跟随。
                         // 进入详情态时 focusedDetailButton 已置 0，故首发 A 即启动；
                         // 上下移动焦点后，A 触发对应按钮（收藏/信息/卸载/强停）。
                         haptics.click()
-                        val app = liveFocusedApp
+                        // 详情态 A 动作用"当前显示的应用"：主页用全局 focusedPackage，
+                        // 搜索页必须用 searchFocusedPackage——否则右栏显示搜索焦点应用、
+                        // 但实际对全局 focusedPackage（上一次主页/详情应用）执行启动/收藏，造成横屏左右不一致。
+                        val app = if (currentTab == MainTab.SEARCH) {
+                            searchFocusedPackage?.let { pkg ->
+                                apps.firstOrNull { it.packageName == pkg && it.installed }
+                            }
+                        } else {
+                            liveFocusedApp
+                        }
                         if (app != null) {
                             when (focusedDetailButton) {
                                 0 -> viewModel.launchApp(app)
@@ -715,23 +884,33 @@ fun HomeScreen(
                             }
                         }
                     } else if (currentTab == MainTab.HOME && focusSide == FocusSide.LEFT_LIST) {
-                        // 列表态：A 点按列表项 → 进入详情态（横屏右栏聚焦首钮 / 竖屏展开浮层）。
-                        // 跨栏逻辑已移除：A 不再"先跨栏再启动"，而是直接进详情。
+                        // 列表态：A 点按列表项
+                        // - 游戏类 / 已注册美术资源 → 打开游戏专属页面；
+                        // - 其它应用 → 进入详情态（横屏右栏聚焦首钮 / 竖屏展开浮层）。
                         haptics.click()
                         if (liveFocusedApp != null) {
-                            focusSide = FocusSide.RIGHT_PANEL
-                            focusedDetailButton = 0
-                            if (!isWideScreen) portraitDrawerOpen = true
+                            if (shouldOpenGamePage(liveFocusedApp)) {
+                                openGamePage(liveFocusedApp)
+                            } else {
+                                focusSide = FocusSide.RIGHT_PANEL
+                                focusedDetailButton = 0
+                                if (!isWideScreen) portraitDrawerOpen = true
+                            }
                         }
-                    } else if (currentTab == MainTab.SEARCH) {
-                        // 搜索页 LIST 态：A 启动当前焦点项；INPUT 态：A 交给 IME（不启动）。
-                        if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.LIST) {
-                            haptics.click()
-                            val pkg = searchFocusedPackage
-                            val app = pkg?.let { apps.firstOrNull { it.packageName == pkg && it.installed } }
-                            if (app != null) viewModel.launchApp(app)
-                        } else {
-                            haptics.tick()
+                    } else if (currentTab == MainTab.SEARCH && focusSide == FocusSide.LEFT_LIST) {
+                        // 搜索列表态：与主页对齐——游戏打开游戏页，其余进入详情态（横屏右栏 / 竖屏浮层）。
+                        haptics.click()
+                        val pkg = searchFocusedPackage
+                        val app = pkg?.let { apps.firstOrNull { it.packageName == pkg && it.installed } }
+                        if (app != null) {
+                            if (shouldOpenGamePage(app)) {
+                                openGamePage(app)
+                            } else {
+                                viewModel.setFocused(app.packageName)
+                                focusSide = FocusSide.RIGHT_PANEL
+                                focusedDetailButton = 0
+                                if (!isWideScreen) portraitDrawerOpen = true
+                            }
                         }
                     } else {
                         haptics.tick()
@@ -742,6 +921,12 @@ fun HomeScreen(
                         // ── 搜索页 B 键三态 ──
                         currentTab == MainTab.SEARCH -> {
                             when {
+                                // 态0：详情态 → B 先退回列表态（与主页一致），不直接退出搜索
+                                focusSide == FocusSide.RIGHT_PANEL -> {
+                                    focusSide = FocusSide.LEFT_LIST
+                                    if (!isWideScreen) portraitDrawerOpen = false
+                                    haptics.tick()
+                                }
                                 // 态1：软键盘可见 → 仅收起软键盘，保持输入框激活态
                                 // （焦点仍留在输入框，可直接再按 Y 退出输入框态；左摇杆仍让位输入）
                                 keyboardVisible -> {
@@ -813,34 +998,84 @@ fun HomeScreen(
                         }
                         // 搜索页 LIST 态：X 键收藏当前焦点项
                         MainTab.SEARCH -> {
-                            if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.LIST) {
-                                searchFocusedPackage?.let { viewModel.toggleFavorite(it) }
+                            if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT) {
+                                // INPUT 态：X 清空输入框（清除搜索关键词）
+                                viewModel.setQuery("")
+                                haptics.tick()
+                            } else if (focusSide == FocusSide.LEFT_LIST) {
+                                // LIST 态：X 直接启动焦点项（所有应用含游戏均 launchApp，游戏页由 A 负责）
+                                val pkg = searchFocusedPackage
+                                val app = pkg?.let { apps.firstOrNull { it.packageName == pkg && it.installed } }
+                                if (app != null) {
+                                    haptics.click()
+                                    viewModel.launchApp(app)
+                                } else {
+                                    haptics.tick()
+                                }
+                            } else {
+                                // 详情态：X 不操作（与主页一致）
+                                haptics.tick()
                             }
-                            haptics.tick()
                         }
                         else -> haptics.tick()
                     }
                 }
                 is GamepadEvent.LeftStickPress -> {
                     // LS（左摇杆按压）：跨栏逻辑已移除。现作页面内"聚焦/进入"动作键：
-                    // - 主页列表态：等价于 A，进入详情态（横屏右栏聚焦首钮 / 竖屏展开浮层）；
-                    // - 主页详情态 / 其它页：无操作（避免误触）。
+                    // - 主页/搜索列表态：等价于 A，进入详情态（横屏右栏聚焦首钮 / 竖屏展开浮层）；
+                    // - 详情态 / 其它页：无操作（避免误触）。
                     haptics.tick()
-                    if (currentTab == MainTab.HOME && focusSide == FocusSide.LEFT_LIST && liveFocusedApp != null) {
-                        focusSide = FocusSide.RIGHT_PANEL
-                        focusedDetailButton = 0
-                        if (!isWideScreen) portraitDrawerOpen = true
+                if (focusSide == FocusSide.LEFT_LIST && (currentTab == MainTab.HOME || currentTab == MainTab.SEARCH)) {
+                    if (currentTab == MainTab.SEARCH) {
+                        val pkg = searchFocusedPackage
+                        val app = pkg?.let { apps.firstOrNull { it.packageName == pkg && it.installed } }
+                        if (app != null) {
+                            if (shouldOpenGamePage(app)) openGamePage(app)
+                            else {
+                                viewModel.setFocused(app.packageName)
+                                focusSide = FocusSide.RIGHT_PANEL
+                                focusedDetailButton = 0
+                                if (!isWideScreen) portraitDrawerOpen = true
+                            }
+                        }
+                    } else if (liveFocusedApp != null) {
+                        if (shouldOpenGamePage(liveFocusedApp)) {
+                            openGamePage(liveFocusedApp)
+                        } else {
+                            focusSide = FocusSide.RIGHT_PANEL
+                            focusedDetailButton = 0
+                            if (!isWideScreen) portraitDrawerOpen = true
+                        }
                     }
+                }
                 }
                 is GamepadEvent.RightStickPress -> {
                     // RS（右摇杆按压）：跨栏逻辑已移除，作页面内动作键。
                     // 主页列表态：与 LS 同效进入详情态；详情态无操作。
                     haptics.tick()
-                    if (currentTab == MainTab.HOME && focusSide == FocusSide.LEFT_LIST && liveFocusedApp != null) {
-                        focusSide = FocusSide.RIGHT_PANEL
-                        focusedDetailButton = 0
-                        if (!isWideScreen) portraitDrawerOpen = true
+                if (focusSide == FocusSide.LEFT_LIST && (currentTab == MainTab.HOME || currentTab == MainTab.SEARCH)) {
+                    if (currentTab == MainTab.SEARCH) {
+                        val pkg = searchFocusedPackage
+                        val app = pkg?.let { apps.firstOrNull { it.packageName == pkg && it.installed } }
+                        if (app != null) {
+                            if (shouldOpenGamePage(app)) openGamePage(app)
+                            else {
+                                viewModel.setFocused(app.packageName)
+                                focusSide = FocusSide.RIGHT_PANEL
+                                focusedDetailButton = 0
+                                if (!isWideScreen) portraitDrawerOpen = true
+                            }
+                        }
+                    } else if (liveFocusedApp != null) {
+                        if (shouldOpenGamePage(liveFocusedApp)) {
+                            openGamePage(liveFocusedApp)
+                        } else {
+                            focusSide = FocusSide.RIGHT_PANEL
+                            focusedDetailButton = 0
+                            if (!isWideScreen) portraitDrawerOpen = true
+                        }
                     }
+                }
                 }
                 is GamepadEvent.Search -> {
                     haptics.tick()
@@ -855,7 +1090,10 @@ fun HomeScreen(
                         // 搜索页内按 Y：在 INPUT ⇄ LIST 之间切换焦点目标。
                         // 统一由 ViewModel.searchFocusTarget 驱动，不再依赖本地 searchFocusOnInput。
                         MainTab.SEARCH -> {
-                            if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT) {
+                            // 详情态(RIGHT_PANEL)：Y 无操作（与主页一致），避免误切输入框
+                            if (focusSide == FocusSide.RIGHT_PANEL) {
+                                haptics.tick()
+                            } else if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT) {
                                 // INPUT → LIST：释放输入焦点 + 收起软键盘
                                 viewModel.setSearchFocusTarget(false)
                                 runCatching { searchTabFocusRequester.freeFocus() }
@@ -951,11 +1189,13 @@ fun HomeScreen(
                 DialogLayer.NONE -> { /* 落到下方页面级分发 */ }
             }
             when (currentTabRef.value) {
-                MainTab.STATS ->
+                MainTab.STATS -> {
                     // 宽屏双栏（重构）：左栏=应用排行(statsListState)、右栏=总览总计(statsLeftScrollState)。
                     // 右摇杆仅在右栏(总计)滚动；左栏(排行)滚动由左摇杆焦点驱动 scrollToItem。
                     // 跨栏已移除：右摇杆恒滚右栏(总计)，不随焦点侧切换。
-                    statsLeftScrollState.scrollBy(delta)
+                    statsLeftScrollState.scrollBy(delta)   // 右栏总览(总计)
+                    statsListState.scrollBy(delta)         // 左栏排行同步滚动（P0-2 修复右摇杆滚动+焦点定位）
+                }
                 MainTab.SEARCH -> searchListState.scrollBy(delta)
                 MainTab.SETTINGS -> {
                     // 设置页列表滚动（子页面已改为独立 Activity，不再在此处理）。
@@ -977,6 +1217,11 @@ fun HomeScreen(
      * 统计页由 HomeScreen 事件循环的 statsFocusIndex 同步，无需额外处理。
      */
     fun syncRightStickFocus() {
+        // 隔离守卫：任意 dialog（设置下拉/确认/信息、统计日期选择器）打开时，右摇杆只滚动
+        // dialog 自身内容，背景页面焦点必须冻结。否则右摇杆滚动 dialog 时会误读背景列表的
+        // 首个可视项索引、把背景焦点同步到 dialog 滚动位置——
+        // 现象：排序方式子菜单内右摇杆滚动，导致底层设置页焦点跳到最底部（隔离失效）。
+        if (currentDialogLayer != DialogLayer.NONE) return
         val tab = currentTabRef.value
         if (tab == MainTab.SEARCH) {
             val idx = searchListState.firstVisibleItemIndex
@@ -986,7 +1231,8 @@ fun HomeScreen(
         } else if (tab == MainTab.SETTINGS) {
             // 需求4：右摇杆自由滚动设置列表后，把焦点行同步到首个可视项，
             // 让"右摇杆停在哪、焦点就跟到哪"在设置页也成立（与 HOME/SEARCH 一致）。
-            // 下拉/确认/信息弹窗打开时由引擎兜底 return，此处不再重复守卫。
+            // 注意：dialog 打开时的隔离由本函数顶部 currentDialogLayer 守卫统一处理，
+            // 此处仅处理设置页无 dialog 时的正常背景列表焦点同步。
             val idx = settingsListState.firstVisibleItemIndex
             val max = settingsMaxRow
             if (idx in 0..max) settingsFocusRow = idx
@@ -1004,6 +1250,11 @@ fun HomeScreen(
                     viewModel.setFocused(pkg)
                 }
             }
+        } else if (tab == MainTab.STATS && statsFocusSide == FocusSide.LEFT_LIST) {
+            // P0-2 / 手柄全链路重构：仅当焦点在 RANK 区时，右摇杆停杆后把排行焦点回写到首个可视项，
+            // 使"右摇杆停在哪、焦点就跟到哪"。OVERVIEW 区焦点在总览控件上，不回写排行（避免焦点错位）。
+            val idx = statsListState.firstVisibleItemIndex.coerceIn(0, (statsEntryCount - 1).coerceAtLeast(0))
+            if (idx != statsFocusIndex) statsFocusIndex = idx
         }
     }
 
@@ -1089,15 +1340,19 @@ fun HomeScreen(
 
     LaunchedEffect(searchActive) {
         if (searchActive) {
-            // 进入搜索页时立即激活输入框（INPUT 态），由 ViewModel 状态机驱动 navigationEnabled。
+            // 进入搜索页：默认落焦到搜索输入框（INPUT 态）并弹出软键盘，便于直接输入。
+            // 推左摇杆/方向键任意方向即进入结果列表（LIST 态，见事件循环 INPUT 分支）；
+            // 亦可按 Y 在 INPUT ⇄ LIST 间切换。输入框激活态由 LaunchedEffect(inputActive) 负责真正聚焦+弹键盘。
             viewModel.setSearchFocusTarget(true)
-            scope.launch { searchTabFocusRequester.requestFocus() }
+            focusSide = FocusSide.LEFT_LIST
+            focusedDetailButton = 0
         } else {
             // 离开搜索页：复位焦点状态（无论是否手动，统一清理，避免残留影响主页导航）。
             viewModel.setSearchFocusTarget(false)
             // 显式收起软键盘，避免激活态残留导致离开后键盘仍悬浮（B/Menu 返回场景）。
             val imm = view.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
             imm?.hideSoftInputFromWindow(view.windowToken, 0)
+            runCatching { searchTabFocusRequester.freeFocus() }
         }
     }
 
@@ -1107,6 +1362,7 @@ fun HomeScreen(
         darkTheme = darkMode != DarkMode.LIGHT,
         useMonet = useMonet,
         isAmoled = darkMode == DarkMode.AMOLED,
+        glassSurface = glassSurface,
         // 主屏已有实时手柄连接状态，直接传入驱动焦点框可见性
         gamepadConnected = gamepadConnected
     ) {
@@ -1131,11 +1387,10 @@ fun HomeScreen(
                 containerColor = Color.Transparent,
                 modifier = Modifier.fillMaxSize(),
                 snackbarHost = { }
-            ) { padding ->
+            ) { _ ->
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(padding)
                 ) {
                 // 复用 HomeScreen 顶层的 isWideScreen（基于 configuration.screenWidthDp >= 720）
                 val detailSideWidth = if (isWideScreen) 300.dp else 0.dp
@@ -1169,18 +1424,21 @@ fun HomeScreen(
                                         } else false
                                     }
                                     KeyEvent.KEYCODE_Y -> {
-                                        // 搜索模式下键盘 Y：toggle INPUT ⇄ LIST（与手柄 Y 一致）
-                                        if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT) {
+                                        // 搜索模式下键盘 Y：toggle INPUT ⇄ LIST（与手柄 Y 一致）；
+                                        // 详情态(RIGHT_PANEL)：Y 无操作（与主页/手柄一致），避免误切输入框。
+                                        if (focusSide == FocusSide.RIGHT_PANEL) {
+                                            haptics.tick(); true
+                                        } else if (searchFocusTarget == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT) {
                                             viewModel.setSearchFocusTarget(false)
                                             runCatching { searchTabFocusRequester.freeFocus() }
                                             val imm = view.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
                                             imm?.hideSoftInputFromWindow(view.windowToken, 0)
+                                            haptics.tick(); true
                                         } else {
                                             viewModel.setSearchFocusTarget(true)
                                             runCatching { searchTabFocusRequester.requestFocus() }
+                                            haptics.tick(); true
                                         }
-                                        haptics.tick()
-                                        true
                                     }
                                     else -> false
                                 }
@@ -1191,13 +1449,58 @@ fun HomeScreen(
                                     // 详情态：Enter 触发当前聚焦按钮（启动等）。
                                     if (currentTab == MainTab.HOME && focusSide == FocusSide.LEFT_LIST) {
                                         if (focusedApp != null) {
-                                            focusSide = FocusSide.RIGHT_PANEL
-                                            focusedDetailButton = 0
-                                            if (!isWideScreen) portraitDrawerOpen = true
+                                            if (shouldOpenGamePage(focusedApp)) {
+                                                openGamePage(focusedApp)
+                                            } else {
+                                                focusSide = FocusSide.RIGHT_PANEL
+                                                focusedDetailButton = 0
+                                                if (!isWideScreen) portraitDrawerOpen = true
+                                            }
                                             haptics.tick()
                                         } else { viewModel.launchFocused(); }
                                         true
                                     } else if (currentTab == MainTab.HOME && focusSide == FocusSide.RIGHT_PANEL) {
+                                        haptics.click()
+                                        val app = focusedApp
+                                        if (app != null) {
+                                            when (focusedDetailButton) {
+                                                0 -> viewModel.launchApp(app)
+                                                1 -> viewModel.toggleFavorite(app.packageName)
+                                                2 -> runCatching {
+                                                    context.startActivity(
+                                                        Intent(
+                                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                            Uri.fromParts("package", app.packageName, null)
+                                                        )
+                                                    )
+                                                }
+                                                3 -> runCatching {
+                                                    context.startActivity(
+                                                        Intent(
+                                                            Intent.ACTION_DELETE,
+                                                            Uri.fromParts("package", app.packageName, null)
+                                                        )
+                                                    )
+                                                }
+                                                4 -> viewModel.forceStop(app.packageName)
+                                            }
+                                        }
+                                        true
+                                    } else if (currentTab == MainTab.SEARCH && focusSide == FocusSide.LEFT_LIST) {
+                                        val pkg = searchFocusedPackage
+                                        val app = pkg?.let { apps.firstOrNull { it.packageName == pkg && it.installed } }
+                                        if (app != null) {
+                                            if (shouldOpenGamePage(app)) openGamePage(app)
+                                            else {
+                                                searchFocusedPackage = app.packageName
+                                                viewModel.setFocused(app.packageName)
+                                                focusSide = FocusSide.RIGHT_PANEL
+                                                focusedDetailButton = 0
+                                                if (!isWideScreen) portraitDrawerOpen = true
+                                            }
+                                        }
+                                        haptics.tick(); true
+                                    } else if (currentTab == MainTab.SEARCH && focusSide == FocusSide.RIGHT_PANEL) {
                                         haptics.click()
                                         val app = focusedApp
                                         if (app != null) {
@@ -1236,8 +1539,8 @@ fun HomeScreen(
                                     if (n.isCtrlPressed) false else false
                                 KeyEvent.KEYCODE_F5 -> { viewModel.rescan(); true }
                                 KeyEvent.KEYCODE_ESCAPE -> {
-                                    // 主页详情态：Esc 先退回列表态（与手柄 B 一致），不触发退出确认。
-                                    if (currentTab == MainTab.HOME && focusSide == FocusSide.RIGHT_PANEL) {
+                                    // 主页/搜索详情态：Esc 先退回列表态（与手柄 B 一致），不触发退出确认。
+                                    if ((currentTab == MainTab.HOME || currentTab == MainTab.SEARCH) && focusSide == FocusSide.RIGHT_PANEL) {
                                         focusSide = FocusSide.LEFT_LIST
                                         if (!isWideScreen) portraitDrawerOpen = false
                                         haptics.tick(); true
@@ -1255,9 +1558,16 @@ fun HomeScreen(
                         }
                     }
             ) {
-                // 穿透背景：底层展示系统桌面壁纸（位于内容之下）
+                // 穿透背景：底层展示系统桌面壁纸（位于内容之下）。
+                // 玻璃开启时对壁纸层整体磨砂（frosted 只能模糊图层自身内容，
+                // Compose 无 backdrop-blur——模糊底图 + 前景卡片 alpha 半透 + 高光
+                // 才是完整的磨砂玻璃链路，前景含文字容器严禁挂 frosted）。
                 if (wallpaperBehind) {
-                    WallpaperBackground(modifier = Modifier.fillMaxSize())
+                    WallpaperBackground(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .frosted(enabled = glassSurface)
+                    )
                 }
 
                 // ── 主体：StatusBar（内嵌 Tab 滑块）+ AnimatedContent 切换 4 个页面 ──
@@ -1267,18 +1577,16 @@ fun HomeScreen(
                 // 关闭（全屏）→ 不加 padding，内容铺满延伸到挖孔区。
                 // 竖屏（非宽屏）挖孔多在顶部中央，StatusBar 已处理状态栏区，主体不左右推挤，
                 // 否则会浪费纵向空间且把内容推偏。故仅"宽屏且开启适配"才加 padding。
+                // 系统栏避让（与子页面 SubPage/GamePage 一致）：仅上下、仅系统栏区域；
+                // 用户要求状态栏内减约 12dp（所有界面统一），故顶部只保留 (状态栏高 - 12dp)。
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .then(
-                            if (isWideScreen && cutoutAdapt)
-                                Modifier.windowInsetsPadding(WindowInsets.displayCutout) else Modifier
-                        )
-                        // 瀑布屏（曲面屏）安全边距：与挖孔开关解耦，对所有页面（含设置页）始终生效，
-                        // 在 displayCutout inset 与 Dimens.waterfallSafe 间取较大值，
-                        // 确保关键内容（焦点框/按钮/列表末项）不贴曲面边缘、避免边缘误触与光学扭曲。
-                        // 设置页同样需要一致的安全余量（竖屏底部避让更高、横屏更矮）。
-                        .then(Modifier.waterfallSafePadding())
+                        .statusBarSafeTop()
+                        .navigationBarsPadding()
+                        // 统一边缘安全边距（瀑布屏/挖孔屏/横竖屏归一）：仅左右，
+                        // 系统桌面壁纸已在下层 fillMaxSize 铺满全屏，此处仅内缩内容层。
+                        .edgeSafePadding(cutoutAdapt)
                 ) {
                     StatusBar(
                         appCount = apps.size,
@@ -1312,20 +1620,13 @@ fun HomeScreen(
                     // - reduceMotion 时退化为纯 fade（无 slide 移动）。
                     AnimatedContent(
                         targetState = currentTab,
+                        // 板块切换统一走「动画机列表」中的 panelSwitch（主页基准），
+                        // 全局各页面 Tab / 板块切换均引用同一过渡机，保证一致。
                         transitionSpec = {
-                            val dir = if (targetState.ordinal > initialState.ordinal) 1 else -1
-                            val fade = if (effectiveReduceMotion) 0 else MotionSpec.TabFade.durationMillis
-                            val slideMs = if (effectiveReduceMotion) 0 else MotionSpec.TabSlideOffset.durationMillis
-                            (fadeIn(animationSpec = tween(fade, easing = FastOutSlowInEasing)) +
-                                slideInHorizontally(
-                                    animationSpec = tween(slideMs, easing = FastOutSlowInEasing),
-                                    initialOffsetX = { dir * it / 20 }
-                                )) togetherWith
-                                (fadeOut(animationSpec = tween(fade, easing = FastOutSlowInEasing)) +
-                                    slideOutHorizontally(
-                                        animationSpec = tween(slideMs, easing = FastOutSlowInEasing),
-                                        targetOffsetX = { -dir * it / 20 }
-                                    ))
+                            MotionMachines.panelSwitch(
+                                forward = MotionMachines.linearForward(initialState.ordinal, targetState.ordinal),
+                                reduceMotion = effectiveReduceMotion
+                            )
                         },
                         label = "tabContent",
                         modifier = Modifier
@@ -1349,6 +1650,13 @@ fun HomeScreen(
                                 focusedPackage = focusedPackage,
                                 onFocus = viewModel::setFocused,
                                 onLaunch = viewModel::launchApp,
+                                onOpen = { app ->
+                                    // 游戏类 / 已注册美术资源的应用：点击打开游戏专属页面；
+                                    // 其余应用：仅选中（保留原详情行为）。
+                                    if (shouldOpenGamePage(app)) openGamePage(app)
+                                    else viewModel.setFocused(app.packageName)
+                                },
+                                shouldOpenGamePage = { app -> shouldOpenGamePage(app) },
                                 onToggleFavorite = { viewModel.toggleFavorite(it) },
                                 favorites = favorites,
                                 badgeOf = badgeOf,
@@ -1402,7 +1710,6 @@ fun HomeScreen(
                                 focusSide = focusSide,
                                 focusedDetailButton = focusedDetailButton,
                                 effectiveReduceMotion = effectiveReduceMotion,
-                                effectiveGlass = effectiveGlass,
                                 wallpaperBehind = wallpaperBehind,
                                 detailScrollState = detailScrollState,
                                 onOpenPortraitDrawer = { portraitDrawerOpen = true },
@@ -1430,8 +1737,33 @@ fun HomeScreen(
                                 leftScrollState = statsLeftScrollState,
                                 focusIndex = statsFocusIndex,
                                 gamepadConnected = gamepadConnected,
+                                onFocus = { statsFocusedPackage = it },
                                 onEntryCountChange = { statsEntryCount = it },
-                                onSelectPeriod = { statsPeriod = it }
+                                onSelectPeriod = { statsPeriod = it },
+                                onEntryClick = { pkg ->
+                                    val app = viewModel.apps.value
+                                        .firstOrNull { it.packageName == pkg }
+                                    if (app != null) {
+                                        when {
+                                            // 游戏（含美术资源）统一跳转游戏页（家园/统计/搜索一致）
+                                            shouldOpenGamePage(app) -> openGamePage(app)
+                                            // 横屏：直接启动对应应用
+                                            isWideScreen -> viewModel.launchApp(app)
+                                            // 竖屏：弹出应用详情浮窗（与主页/搜索一致）
+                                            else -> {
+                                                viewModel.setFocused(pkg)
+                                                portraitDrawerOpen = true
+                                            }
+                                        }
+                                    }
+                                },
+                                cutoutAdapt = cutoutAdapt,
+                                // 手柄全链路重构：焦点区/控件槽/控件桥透传，打通排行·滑块·总览控件手柄交互。
+                                focusZone = if (statsFocusSide == FocusSide.RIGHT_PANEL)
+                                    cn.mocabolka.run.ui.components.StatsFocusZone.OVERVIEW
+                                else cn.mocabolka.run.ui.components.StatsFocusZone.RANK,
+                                overviewFocusIndex = statsOverviewIndex,
+                                control = statsControl
                             )
                             MainTab.SEARCH -> SearchTabContent(
                                 query = query,
@@ -1442,10 +1774,30 @@ fun HomeScreen(
                                 visibleList = searchResults,
                                 listState = searchListState,
                                 focusedPackage = searchFocusedPackage,
-                                onFocus = { searchFocusedPackage = it },
+                                onFocus = { pkg ->
+                                    searchFocusedPackage = pkg
+                                    if (!isWideScreen) portraitDrawerOpen = true
+                                },
                                 onLaunch = { app ->
                                     // 启动走全局 launchApp，但焦点状态保持各自独立
                                     viewModel.launchApp(app)
+                                },
+                                // 触控整行：与主页对齐——游戏打开游戏页，其余进入详情态（横屏右栏 / 竖屏浮层）。
+                                onOpen = { app ->
+                                    if (shouldOpenGamePage(app)) {
+                                        openGamePage(app)
+                                    } else {
+                                        // 触控进入详情前先收起软键盘：否则在手机/平板上详情浮层
+                                        // 会被输入法遮挡，表现为"点了没反应、应用启不动"。
+                                        val imm = view.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                                        imm?.hideSoftInputFromWindow(view.windowToken, 0)
+                                        keyboardVisible = false
+                                        searchFocusedPackage = app.packageName
+                                        viewModel.setFocused(app.packageName)
+                                        focusSide = FocusSide.RIGHT_PANEL
+                                        focusedDetailButton = 0
+                                        if (!isWideScreen) portraitDrawerOpen = true
+                                    }
                                 },
                                 onToggleFavorite = { viewModel.toggleFavorite(it) },
                                 favorites = favorites,
@@ -1464,6 +1816,36 @@ fun HomeScreen(
                                 portraitDrawerOpen = portraitDrawerOpen,
                                 onOpenPortraitDrawer = { portraitDrawerOpen = true },
                                 onKeyboardVisibleChange = { keyboardVisible = it },
+                                // ── 详情态（与主页对齐）──
+                                detailOpen = focusSide == FocusSide.RIGHT_PANEL,
+                                focusedDetailButton = focusedDetailButton,
+                                onFocusedButtonChange = { focusedDetailButton = it },
+                                launching = launching,
+                                wallpaperBehind = wallpaperBehind,
+                                showUsageHint = !UsageStatsPermissionHelper.isGranted(context),
+                                weeklyUsageMap = weeklyUsageMap,
+                                detailSideWidth = detailSideWidth,
+                                onOpenInfo = { app ->
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                Uri.fromParts("package", app.packageName, null)
+                                            )
+                                        )
+                                    }
+                                },
+                                onUninstall = { app ->
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(
+                                                Intent.ACTION_DELETE,
+                                                Uri.fromParts("package", app.packageName, null)
+                                            )
+                                        )
+                                    }
+                                },
+                                onForceStop = { viewModel.forceStop(it.packageName) },
                                 resultCount = searchResults.size
                             )
                             MainTab.SETTINGS -> {
@@ -1496,6 +1878,10 @@ fun HomeScreen(
                                         onGlassSurfaceChange = { viewModel.settings.glassSurface = it },
                                         reduceMotion = reduceMotion,
                                         onReduceMotionChange = { viewModel.settings.reduceMotion = it },
+                                        killAfterLaunch = killAfterLaunch,
+                                        onKillAfterLaunchChange = { viewModel.settings.killAfterLaunch = it },
+                                        hapticIntensity = hapticIntensity,
+                                        onHapticIntensityChange = { viewModel.settings.setHapticIntensity(it) },
                                         orientationMode = orientationMode,
                                         onOrientationModeChange = { mode ->
                                             viewModel.settings.orientationMode = mode
@@ -1530,6 +1916,13 @@ fun HomeScreen(
 
                 // 启动遮罩：圆形揭示（Circular Reveal）替代纯淡入
                 LaunchOverlay(visible = launching)
+
+                // 游戏专属页面（参考 Steam 大屏幕游戏库-游戏界面）已抽离为独立 Activity
+                // （GamePageActivity），由主页在应用列表行按 A / 点击进入，不再以覆盖层形式
+                // 渲染于 HomeScreen 之下。美术资源经 GameArtResolver 抽象（当前读 APK assets
+                // 本地文件，后续可接入用户自定义与线上实时链接），Activity 内渲染，本页无需改动。
+
+
 
                 // 触摸退出二次确认气泡（底部居中，不遮挡全屏）
                 // 2026-07-14 归一化：复用 ReverieToast 模板，与"已扫描 N 个应用"等覆盖式 toast 同款外观/动画，
@@ -1578,7 +1971,7 @@ fun HomeScreen(
         if (!isWideScreen) {
             // 半透明遮罩
             AnimatedVisibility(
-                visible = portraitDrawerOpen && focusedApp != null,
+                visible = portraitDrawerOpen && focusedApp != null && !shouldOpenGamePage(focusedApp),
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.fillMaxSize().zIndex(1f)
@@ -1596,9 +1989,9 @@ fun HomeScreen(
             }
             // 底部详情面板
             AnimatedVisibility(
-                visible = portraitDrawerOpen && focusedApp != null,
-                enter = fadeIn(animationSpec = MotionSpec.Medium) + slideInVertically(initialOffsetY = { it }),
-                exit = fadeOut(animationSpec = MotionSpec.Medium) + slideOutVertically(targetOffsetY = { it }),
+                visible = portraitDrawerOpen && focusedApp != null && !shouldOpenGamePage(focusedApp),
+                enter = MotionMachines.bottomSheetEnter(),
+                exit = MotionMachines.bottomSheetExit(),
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(1f)
@@ -1660,7 +2053,6 @@ fun HomeScreen(
                                 showUsageHint = !UsageStatsPermissionHelper.isGranted(context),
                                 todayUsage = todayUsageMap[focusedApp?.packageName] ?: 0L,
                                 weeklyUsage = weeklyUsageMap[focusedApp?.packageName] ?: 0L,
-                                glass = effectiveGlass,
                                 reduceMotion = effectiveReduceMotion,
                                 scrollState = detailScrollState,
                                 wallpaperBehind = wallpaperBehind,
@@ -1738,12 +2130,8 @@ fun HomeScreen(
         AnimatedVisibility(
             visible = sBridge.pendingConfirm != null,
             modifier = Modifier.fillMaxSize().zIndex(1f),
-            enter = fadeIn(animationSpec = MotionSpec.DialogEnter)
-                + scaleIn(initialScale = 0.92f, animationSpec = MotionSpec.DialogEnter,
-                    transformOrigin = TransformOrigin.Center),
-            exit = fadeOut(animationSpec = MotionSpec.DialogExit)
-                + scaleOut(targetScale = 0.92f, animationSpec = MotionSpec.DialogExit,
-                    transformOrigin = TransformOrigin.Center)
+            enter = MotionMachines.dialogEnter(),
+            exit = MotionMachines.dialogExit()
         ) {
             val snap = lastConfirmSnapshot
             if (snap != null) {
@@ -1766,12 +2154,8 @@ fun HomeScreen(
         AnimatedVisibility(
             visible = sBridge.pendingInfo != null,
             modifier = Modifier.fillMaxSize().zIndex(1f),
-            enter = fadeIn(animationSpec = MotionSpec.DialogEnter)
-                + scaleIn(initialScale = 0.92f, animationSpec = MotionSpec.DialogEnter,
-                    transformOrigin = TransformOrigin.Center),
-            exit = fadeOut(animationSpec = MotionSpec.DialogExit)
-                + scaleOut(targetScale = 0.92f, animationSpec = MotionSpec.DialogExit,
-                    transformOrigin = TransformOrigin.Center)
+            enter = MotionMachines.dialogEnter(),
+            exit = MotionMachines.dialogExit()
         ) {
             val snap = lastInfoSnapshot
             if (snap != null) {
@@ -1791,12 +2175,8 @@ fun HomeScreen(
         AnimatedVisibility(
             visible = sBridge.openDropdownRow >= 0,
             modifier = Modifier.fillMaxSize().zIndex(1f),
-            enter = fadeIn(animationSpec = MotionSpec.DialogEnter)
-                + scaleIn(initialScale = 0.92f, animationSpec = MotionSpec.DialogEnter,
-                    transformOrigin = TransformOrigin.Center),
-            exit = fadeOut(animationSpec = MotionSpec.DialogExit)
-                + scaleOut(targetScale = 0.92f, animationSpec = MotionSpec.DialogExit,
-                    transformOrigin = TransformOrigin.Center)
+            enter = MotionMachines.dialogEnter(),
+            exit = MotionMachines.dialogExit()
         ) {
             DropdownDialog(
                 title = sBridge.dropdownLabel,
@@ -1820,22 +2200,26 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(1f),
-            enter = fadeIn(animationSpec = MotionSpec.DialogEnter)
-                + scaleIn(initialScale = 0.92f, animationSpec = MotionSpec.DialogEnter,
-                    transformOrigin = TransformOrigin.Center),
-            exit = fadeOut(animationSpec = MotionSpec.DialogExit)
-                + scaleOut(targetScale = 0.92f, animationSpec = MotionSpec.DialogExit,
-                    transformOrigin = TransformOrigin.Center)
+            enter = MotionMachines.dialogEnter(),
+            exit = MotionMachines.dialogExit()
         ) {
-            // 日/月/年视图 → 原生 Material3 日期选择器（替代自绘 DateRangePickerDialog）。
-            // 周视图入口已隐藏（周期滑块仅 DAILY/MONTHLY/YEARLY），此处不再处理 WEEKLY。
-            NativeDatePickerDialog(
-                period = statsPeriod,
-                initialAnchorMs = statsAnchorMs,
-                bridge = statsDatePickerBridge.value,
-                onConfirm = { ms: Long -> statsAnchorMs = ms; statsDatePickerOpen = false; setDialogLayer(DialogLayer.NONE) },
-                onDismiss = { statsDatePickerOpen = false; setDialogLayer(DialogLayer.NONE) }
-            )
+            // 日视图 → 原生 Material3 日期选择器；周/月/年 → 自绘 ReveriePeriodPickerDialog（周期单位步进）。
+            when (statsPeriod) {
+                StatsPeriod.DAILY -> NativeDatePickerDialog(
+                    period = statsPeriod,
+                    initialAnchorMs = statsAnchorMs,
+                    bridge = statsDatePickerBridge.value,
+                    onConfirm = { ms -> statsAnchorMs = ms; statsDatePickerOpen = false; setDialogLayer(DialogLayer.NONE) },
+                    onDismiss = { statsDatePickerOpen = false; setDialogLayer(DialogLayer.NONE) }
+                )
+                else -> ReveriePeriodPickerDialog(
+                    period = statsPeriod,
+                    initialAnchorMs = statsAnchorMs,
+                    bridge = statsDatePickerBridge.value,
+                    onConfirm = { ms -> statsAnchorMs = ms; statsDatePickerOpen = false; setDialogLayer(DialogLayer.NONE) },
+                    onDismiss = { statsDatePickerOpen = false; setDialogLayer(DialogLayer.NONE) }
+                )
+            }
         }
     }
 
@@ -1926,7 +2310,7 @@ private fun CategoryTabsRow(
                             ) {
                                 Text(
                                     text = if (count > 999) "999+" else count.toString(),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isSelected) MaterialTheme.colorScheme.primaryContainer
                                             else MaterialTheme.colorScheme.onSurface
@@ -1947,6 +2331,8 @@ private fun AppList(
     onFocus: (String) -> Unit,
     onLaunch: (AppModel) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    /** 点击整行的回调（触控进入）。默认仅选中；主页对游戏类改为打开游戏页。 */
+    onOpen: (AppModel) -> Unit = { onFocus(it.packageName) },
     favorites: Set<String>,
     badgeOf: (String) -> Int,
     query: String,
@@ -2042,6 +2428,7 @@ private fun AppList(
                 highlight = query,
                 onFocus = { onFocus(app.packageName) },
                 onLaunch = { onLaunch(app) },
+                onOpen = { onOpen(app) },
                 onToggleFavorite = { onToggleFavorite(app.packageName) },
                 showGamepadHints = showGamepadHints,
                 todayUsage = todayUsageMap[app.packageName] ?: 0L,
@@ -2153,7 +2540,7 @@ private fun handleSettingsEvent(
                 Direction.LEFT, Direction.RIGHT -> { /* 保留不绑定，避免误触 */ }
             }
         }
-        is GamepadEvent.Back -> onDismiss()
+        is GamepadEvent.Back -> { haptics.click(); onDismiss() }
         is GamepadEvent.Shoulder -> {
             // LB/RB：设置项翻页（±3）
             val page = 3
@@ -2166,8 +2553,10 @@ private fun handleSettingsEvent(
         // Y / LT / RT：放空（语义保留）
         is GamepadEvent.Search,
         is GamepadEvent.Trigger -> { /* 无操作 */ }
-        // X 键：任务 33 —— 打开当前焦点设置项的信息说明弹窗
-        is GamepadEvent.Favorite -> onFavorite()
+        // X 键：手柄专属下拉切换。
+        //   - 若当前焦点行是 Dropdown：直接循环切换下一项（向下闭环），不进子菜单。
+        //   - 否则保持任务 33 行为：打开当前焦点设置项的信息说明弹窗。
+        is GamepadEvent.Favorite -> if (!control.onCycle(currentRow)) onFavorite()
         // 其它按键在设置页不处理。
         else -> { /* 无操作 */ }
     }
@@ -2263,6 +2652,10 @@ private fun HomeTabContent(
     onFocus: (String) -> Unit,
     onLaunch: (AppModel) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    /** 点击整行的回调（触控进入）。默认仅选中；主页对游戏类改为打开游戏页。 */
+    onOpen: (AppModel) -> Unit = { onFocus(it.packageName) },
+    /** 是否打开游戏专属页面（游戏类或已注册美术资源）。由 HomeScreen 传入，保持判定与主页一致。 */
+    shouldOpenGamePage: (AppModel?) -> Boolean = { false },
     favorites: Set<String>,
     badgeOf: (String) -> Int,
     currentListState: LazyListState,
@@ -2289,8 +2682,6 @@ private fun HomeTabContent(
     focusedDetailButton: Int = -1,
     /** 减少动态效果（省电/无障碍聚合后）：由 HomeScreen 计算后传入。 */
     effectiveReduceMotion: Boolean = false,
-    /** 玻璃拟态（省电聚合后）：由 HomeScreen 计算后传入。 */
-    effectiveGlass: Boolean = false,
     /** 穿透背景模式：详情面板 surface 进一步透明。 */
     wallpaperBehind: Boolean = false,
     /** 右侧详情面板滚动状态（lift 到上层，供右摇杆在右栏焦点时滚动）。 */
@@ -2344,7 +2735,7 @@ private fun HomeTabContent(
                             AppList(
                                 apps = visibleList, focusedPackage = focusedPackage,
                                 onFocus = onFocus, onLaunch = onLaunch,
-                                onToggleFavorite = onToggleFavorite, favorites = favorites,
+                                onToggleFavorite = onToggleFavorite, onOpen = onOpen, favorites = favorites,
                                 badgeOf = badgeOf, query = "", state = currentListState,
                                 isEmpty = isEmpty, emptyText = emptyText, emptyHint = emptyHint,
                                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -2366,7 +2757,6 @@ private fun HomeTabContent(
                     searchInfo = searchInfo, showUsageHint = showUsageHint,
                     todayUsage = todayUsageMap[focusedApp?.packageName] ?: 0L,
                     weeklyUsage = weeklyUsageMap[focusedApp?.packageName] ?: 0L,
-                    glass = effectiveGlass,
                     reduceMotion = effectiveReduceMotion,
                     scrollState = detailScrollState,
                     wallpaperBehind = wallpaperBehind,
@@ -2408,10 +2798,24 @@ private fun HomeTabContent(
                 }
                 AppList(
                     apps = visibleList, focusedPackage = focusedPackage,
-                    // 竖屏：点击列表项在选中的同时展开底部详情抽屉（触摸直觉）
-                    onFocus = { pkg -> onFocus(pkg); onOpenPortraitDrawer() },
+                    // 竖屏：点击列表项在选中的同时展开底部详情抽屉（触摸直觉）。
+                    // 仅非游戏类进入详情态时展开浮窗；游戏类由 openGamePage 跳转并自行收起浮层
+                    // （portraitDrawerOpen=false），此处若仍展开会残留上一次应用的详情
+                    // （点击游戏不走 setFocused，focusedApp 停留在上一个应用）。
+                    onFocus = { pkg ->
+                        onFocus(pkg)
+                        val fApp = visibleList.firstOrNull { it.packageName == pkg }
+                        if (fApp != null && !shouldOpenGamePage(fApp)) onOpenPortraitDrawer()
+                    },
                     onLaunch = onLaunch,
-                    onToggleFavorite = onToggleFavorite, favorites = favorites,
+                    onToggleFavorite = onToggleFavorite,
+                    // 竖屏触控：游戏类打开游戏页（由 onOpen 参数处理）；其余应用点按后展开底部详情抽屉。
+                    onOpen = { app ->
+                        onOpen(app)
+                        // 游戏类跳转后禁止再展开竖屏浮窗，否则返回子页会残留上一次应用详情。
+                        if (!shouldOpenGamePage(app)) onOpenPortraitDrawer()
+                    },
+                    favorites = favorites,
                     badgeOf = badgeOf, query = "", state = currentListState,
                     isEmpty = isEmpty, emptyText = emptyText, emptyHint = emptyHint,
                     queryAllGranted = queryAllGranted,
@@ -2439,19 +2843,17 @@ private fun HomeTabContent(
         // 规则4：不显示任何方向键/滚动提示。
         // 仅在手柄已连接时显示：未连手柄用户无键位提示需求，整体隐藏。
         // 使用统一的 GamepadBottomHintBar 组件（自动响应手柄插拔，与其他页面一致）。
-        GamepadBottomHintBar(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (focusSide == FocusSide.RIGHT_PANEL) {
-                Hint(KeyToken.A, "启动")
-                HintGap()
-                Hint(KeyToken.B, "返回")
-            } else {
-                Hint(KeyToken.A, "详情")
+        // 规则：A 确认 / B 返回为默认键不进底部提示栏（退出见标题栏）；仅展示 X 启动 / Y 收藏。
+        // 详情态(RIGHT_PANEL)无独立快捷键，隐藏整条提示栏以避免空栏。
+        if (focusSide != FocusSide.RIGHT_PANEL) {
+            // HomeScreen 根容器仅有 edgeSafePadding（StatusBar 内部已用 ContentHorizontal，故根无法再加），
+            // 此处显式传 ContentHorizontal 以保持与原视觉一致；其它页面用 BottomHintBar 默认 0.dp 即可与内容对齐。
+            GamepadBottomHintBar(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalPadding = Dimens.ContentHorizontal
+            ) {
                 Hint(KeyToken.X, "启动")
                 Hint(KeyToken.Y, "收藏")
-                HintGap()
-                Hint(KeyToken.B, "返回")
             }
         }
         }
@@ -2475,6 +2877,8 @@ private fun SearchTabContent(
     onFocus: (String) -> Unit,
     onLaunch: (AppModel) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    /** 点击整行的回调（触控进入）。默认仅选中；主页对游戏类改为打开游戏页。 */
+    onOpen: (AppModel) -> Unit = { onFocus(it.packageName) },
     favorites: Set<String>,
     badgeOf: (String) -> Int,
     isEmpty: Boolean,
@@ -2492,6 +2896,20 @@ private fun SearchTabContent(
     onOpenPortraitDrawer: () -> Unit = {},
     /** 搜索框焦点变化（软键盘显隐）回调，由 HomeScreen 维护 keyboardVisible 状态。 */
     onKeyboardVisibleChange: (Boolean) -> Unit = {},
+    // ── 详情态（与主页对齐）所需参数 ──
+    /** 详情态（横屏右栏 / 竖屏浮层）是否展开，由 HomeScreen 的 focusSide 驱动。 */
+    detailOpen: Boolean = false,
+    /** 详情面板当前焦点按钮索引（A 浮块跟随）。 */
+    focusedDetailButton: Int = 0,
+    onFocusedButtonChange: (Int) -> Unit = {},
+    launching: Boolean = false,
+    wallpaperBehind: Boolean = false,
+    showUsageHint: Boolean = false,
+    weeklyUsageMap: Map<String, Long> = emptyMap(),
+    detailSideWidth: androidx.compose.ui.unit.Dp,
+    onOpenInfo: (AppModel) -> Unit = {},
+    onUninstall: (AppModel) -> Unit = {},
+    onForceStop: (AppModel) -> Unit = {},
     /** 搜索结果总数（用于显示计数标签）。 */
     resultCount: Int = 0
 ) {
@@ -2543,13 +2961,9 @@ private fun SearchTabContent(
                 }
                 .padding(bottom = Dimens.sm),
             placeholder = { Text("搜索应用 / 游戏") },
-            leadingIcon = {
-                if (showGamepadHints) {
-                    KeyBadge(KeyToken.Y)
-                } else {
+                leadingIcon = {
                     Icon(Icons.Default.Search, contentDescription = null)
-                }
-            },
+                },
             trailingIcon = {
                 IconButton(onClick = onCloseSearch) {
                     Icon(Icons.Default.Close, contentDescription = "关闭搜索")
@@ -2590,51 +3004,116 @@ private fun SearchTabContent(
                 )
             }
         }
-        // 搜索结果列表
-        AppList(
-            apps = visibleList,
-            focusedPackage = focusedPackage,
-            // 竖屏：选中搜索结果的同时展开底部详情抽屉（与主页一致）
-            onFocus = { pkg -> onFocus(pkg); if (!isWideScreen && !portraitDrawerOpen) onOpenPortraitDrawer() },
-            onLaunch = onLaunch,
-            onToggleFavorite = onToggleFavorite,
-            favorites = favorites,
-            badgeOf = badgeOf,
-            query = query,
-            state = listState,
-            isEmpty = isEmpty,
-            emptyText = emptyText,
-            emptyHint = "",
-            showGamepadHints = showGamepadHints,
-            todayUsageMap = todayUsageMap,
-            reduceMotion = effectiveReduceMotion,
-            entranceKey = "search|$query",
+        // 搜索结果列表 / 详情面板区域：横屏详情态与主页一致（左列表 + 右详情面板并排）。
+        val searchDetailApp = visibleList.firstOrNull { it.packageName == focusedPackage }
+        val searchDetailFavorite = searchDetailApp?.let { it.packageName in favorites } ?: false
+
+        val detailScrollState = rememberScrollState()
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-        )
-        // 底部操作提示栏（与主体隔离，规则2）：仅手柄连接时显示。
-        // 规则3：Y 键已在搜索框 leadingIcon 给出浮块，此处不复现；
-        // 规则4：不显示方向键/滚动提示。
-        // 输入框激活态：A 启动（首项）；
-        //   - 软键盘可见：B 仅收键盘（仍激活）、Y 退出输入到列表，二者事件不同需分开；
-        //   - 软键盘隐藏：B 退输入(态2) 与 Y 退出输入 指向同一事件 → 合并显示 "B/Y 退出输入"。
-        // 列表态：A 启动 / Y 搜索 / B 返回（事件不同，分开）。
-        GamepadBottomHintBar(
-            modifier = Modifier.fillMaxWidth()
         ) {
-            Hint(KeyToken.A, "启动")
-            HintGap()
-            if (inputActive) {
-                if (keyboardVisible) {
-                    Hint(KeyToken.Y, "退出输入")
-                    Hint(KeyToken.B, "收键盘")
-                } else {
-                    Hint("B/Y", "退出输入")
+            val detailApp = searchDetailApp
+            // 单一空安全判断替代原 showSearchDetail + !! 组合（消除冗余条件警告）
+            if (isWideScreen && detailOpen && detailApp != null) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    AppList(
+                        apps = visibleList,
+                        focusedPackage = focusedPackage,
+                        onFocus = { pkg -> onFocus(pkg); if (!isWideScreen && !portraitDrawerOpen) onOpenPortraitDrawer() },
+                        onLaunch = onLaunch,
+                        onToggleFavorite = onToggleFavorite,
+                        onOpen = onOpen,
+                        favorites = favorites,
+                        badgeOf = badgeOf,
+                        query = query,
+                        state = listState,
+                        isEmpty = isEmpty,
+                        emptyText = emptyText,
+                        emptyHint = "",
+                        showGamepadHints = showGamepadHints,
+                        todayUsageMap = todayUsageMap,
+                        reduceMotion = effectiveReduceMotion,
+                        entranceKey = "search|$query",
+                        modifier = Modifier
+                            .weight(1.6f)
+                            .fillMaxSize()
+                    )
+                    // 左栏与右栏之间的间距（与 Home 页一致：8dp 视觉呼吸，跨栏浮块已移除不再需要骑缝空间）。
+                    Box(
+                        modifier = Modifier.width(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {}
+                    AppDetailPanel(
+                        app = detailApp,
+                        isFavorite = searchDetailFavorite,
+                        onToggleFavorite = onToggleFavorite,
+                        onLaunch = onLaunch,
+                        launching = launching,
+                        onOpenInfo = onOpenInfo,
+                        onUninstall = onUninstall,
+                        onForceStop = onForceStop,
+                        badgeCount = badgeOf(detailApp.packageName) ?: 0,
+                        searchInfo = null,
+                        showUsageHint = showUsageHint,
+                        todayUsage = todayUsageMap[detailApp.packageName] ?: 0L,
+                        weeklyUsage = weeklyUsageMap[detailApp.packageName] ?: 0L,
+                        reduceMotion = effectiveReduceMotion,
+                        scrollState = detailScrollState,
+                        wallpaperBehind = wallpaperBehind,
+                        focusedButtonIndex = focusedDetailButton,
+                        onFocusedButtonChange = onFocusedButtonChange,
+                        modifier = Modifier
+                            .width(detailSideWidth)
+                            .fillMaxHeight()
+                            .focusBorder(detailOpen, MaterialTheme.colorScheme.primary, RoundedCornerShape(Dimens.lg))
+                    )
                 }
             } else {
-                Hint(KeyToken.Y, "搜索")
-                Hint(KeyToken.B, "返回")
+                AppList(
+                    apps = visibleList,
+                    focusedPackage = focusedPackage,
+                    onFocus = { pkg -> onFocus(pkg); if (!isWideScreen && !portraitDrawerOpen) onOpenPortraitDrawer() },
+                    onLaunch = onLaunch,
+                    onToggleFavorite = onToggleFavorite,
+                    onOpen = onOpen,
+                    favorites = favorites,
+                    badgeOf = badgeOf,
+                    query = query,
+                    state = listState,
+                    isEmpty = isEmpty,
+                    emptyText = emptyText,
+                    emptyHint = "",
+                    showGamepadHints = showGamepadHints,
+                    todayUsageMap = todayUsageMap,
+                    reduceMotion = effectiveReduceMotion,
+                    entranceKey = "search|$query",
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+        // 底部操作提示栏：详情态与主页一致（A 打开 / B 返回）。
+        // 列表态：A 打开 / X 收藏 / Y 输入(激活搜索框) / B 返回；输入态：Y 退出输入。
+        // 搜索页 Y 只负责切换输入框，绝不触发收藏（与主页 Y=收藏分流，已在事件循环明确处理）。
+        // 规则：A 打开 / B 返回为默认键不进底部提示栏；列表态展示 X 收藏 / Y 输入，输入态展示 Y 退出输入。
+        // 详情态无独立快捷键，隐藏整条提示栏。
+        if (!detailOpen) {
+            // 同 HomeTabContent：HomeScreen 根容器无 ContentHorizontal，显式传入以保持原视觉。
+            GamepadBottomHintBar(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalPadding = Dimens.ContentHorizontal
+            ) {
+                if (inputActive) {
+                    Hint(KeyToken.Y, "退出输入")
+                    HintGap()
+                    // INPUT 态十字键（D-pad）左右移动文本光标（让位 IME），
+                    // 此分工非显而易见，明确提示以免用户不知（覆盖此前"底部禁十字键提示"规则）。
+                    Hint("←→", "移动光标")
+                } else {
+                    Hint(KeyToken.X, "收藏")
+                    Hint(KeyToken.Y, "输入")
+                }
             }
         }
     }
@@ -2673,6 +3152,10 @@ private fun SettingsTabContent(
     onGlassSurfaceChange: (Boolean) -> Unit,
     reduceMotion: Boolean,
     onReduceMotionChange: (Boolean) -> Unit,
+    killAfterLaunch: Boolean = false,
+    onKillAfterLaunchChange: (Boolean) -> Unit = {},
+    hapticIntensity: HapticIntensity = HapticIntensity.WEAK,
+    onHapticIntensityChange: (HapticIntensity) -> Unit = {},
     orientationMode: OrientationMode,
     onOrientationModeChange: (OrientationMode) -> Unit,
     focusedRow: Int,
@@ -2705,6 +3188,8 @@ private fun SettingsTabContent(
         dynamicBackground = dynamicBackground, onDynamicBackgroundChange = onDynamicBackgroundChange,
         glassSurface = glassSurface, onGlassSurfaceChange = onGlassSurfaceChange,
         reduceMotion = reduceMotion, onReduceMotionChange = onReduceMotionChange,
+        killAfterLaunch = killAfterLaunch, onKillAfterLaunchChange = onKillAfterLaunchChange,
+        hapticIntensity = hapticIntensity, onHapticIntensityChange = onHapticIntensityChange,
         orientationMode = orientationMode, onOrientationModeChange = onOrientationModeChange,
         focusedRow = focusedRow, onFocusedRowChange = onFocusedRowChange,
         listState = listState, onManagePermissions = onManagePermissions,

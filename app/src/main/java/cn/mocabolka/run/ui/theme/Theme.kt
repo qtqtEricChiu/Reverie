@@ -15,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import cn.mocabolka.run.gamepad.GamepadDetector
+import cn.mocabolka.run.ui.DarkMode
+import cn.mocabolka.run.ui.SettingsRepository
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -322,15 +324,28 @@ fun LandscapeTheme(
      * 该值驱动 [LocalShowFocusIndicators] —— 未连接手柄时不显示任何焦点框。
      */
     gamepadConnected: Boolean? = null,
+    /**
+     * 玻璃拟态开关（驱动 [LocalGlassEnabled] 全局注入）。
+     * 传 null 时由主题内部新建 [SettingsRepository] 读取持久化值（子页独立 Activity 场景）；
+     * 主屏 / 设置页等已持有实时 Flow 的调用方应显式传入以获得即时响应。
+     */
+    glassSurface: Boolean? = null,
     content: @Composable () -> Unit
 ) {
     val colorScheme = reverieColorScheme(darkTheme, useMonet, isAmoled)
     val ctx = LocalContext.current
     // 焦点框可见性：手柄未连接 / 纯触控模式下关闭，避免无意义的焦点高亮。
+    // remember 缓存 Flow 实例：否则每次重组新建 callbackFlow 导致广播接收器反复注册/注销
+    val gamepadFlow = remember(ctx) { GamepadDetector.gamepadConnectedFlow(ctx) }
     val showFocus = gamepadConnected
-        ?: GamepadDetector.gamepadConnectedFlow(ctx)
-            .collectAsState(initial = GamepadDetector.isGamepadConnected()).value
-    CompositionLocalProvider(LocalShowFocusIndicators provides showFocus) {
+        ?: gamepadFlow.collectAsState(initial = GamepadDetector.isGamepadConnected()).value
+    // 玻璃开关：调用方未提供时回退到 SharedPreferences 持久化值（跨 Activity 一致）
+    val glass = glassSurface
+        ?: remember(ctx) { SettingsRepository(ctx) }.glassSurfaceFlow.collectAsState().value
+    CompositionLocalProvider(
+        LocalShowFocusIndicators provides showFocus,
+        LocalGlassEnabled provides glass
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = TvTypography,
@@ -338,4 +353,28 @@ fun LandscapeTheme(
             content = content
         )
     }
+}
+
+/**
+ * ThemeContent 归一化包装器：子页 / 游戏页用 [SettingsRepository] 直接驱动
+ * darkTheme / useMonet / isAmoled，消除各处重复的 `when (settings.darkMode) { … }` 样板。
+ * 仅改签名、不改主题实现 —— 内部复用上面的 [LandscapeTheme] 主实现。
+ */
+@Composable
+fun LandscapeTheme(
+    settings: SettingsRepository,
+    content: @Composable () -> Unit
+) {
+    val darkTheme = when (settings.darkMode) {
+        DarkMode.LIGHT -> false
+        DarkMode.AMOLED, DarkMode.DARK -> true
+        else -> isSystemInDarkTheme()
+    }
+    LandscapeTheme(
+        darkTheme = darkTheme,
+        useMonet = settings.useMonet,
+        isAmoled = settings.darkMode == DarkMode.AMOLED,
+        glassSurface = settings.glassSurfaceFlow.collectAsState().value,
+        content = content
+    )
 }

@@ -7,49 +7,48 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import kotlin.math.max
 
 /**
- * 瀑布屏（曲面屏）两侧安全边距工具 —— **仅处理左右两侧，底部不介入（让页面贴边）**。
+ * 全屏统一边缘安全边距（瀑布屏 / 挖孔屏 / 横竖屏归一，2026-07-22 规范）。
  *
- * 背景：曲面屏手机（waterfall display）弯曲区主要在**左右两侧**，内容贴近会被光学扭曲、
- * 且边缘误触率高。Android 在 API 30+ 把瀑布弯曲区计入 [WindowInsets.displayCutout]
- * 的左右 inset，但很多设备报出的值偏小（甚至只报前置摄像头缺口），不足以规避曲面边缘。
+ * 规则：
+ * - **绝不触碰上下**：上下均不加任何边距，状态栏 / 导航栏由系统自动适配（透明叠加）。
+ * - **竖屏**：瀑布屏（曲面）取真实弯曲区 [WindowInsets.displayCutout] 左右 inset；无瀑布则回退到
+ *   [Dimens.waterfallSafe] 固定值；二者取较大值，保证两侧 ≥ 安全余量且不浪费直屏空间。
+ * - **横屏**：左右统一固定 [Dimens.waterfallSafe]；若 [cutoutAdapt] = true 再叠加 displayCutout
+ *   左右（挖孔屏适配，绕开侧置 / 异形摄像头）。上下仍不加。
  *
- * 策略：在 displayCutout 的左右 inset 与本函数内部兜底 (12dp) 之间取**较大值**作为左右内边距。
- *  - 普通直屏设备：cutout 左右为 0 → 仍保留 12dp 可见避让（避免贴边），与主页节奏一致；
- *  - 瀑布屏设备：cutout 左右较大 → 取真实弯曲区，确保关键内容（按钮、焦点框）不贴曲面边缘。
- *
- * **底部处理原则**：本工具**不**为底部加任何 padding。底部应完全贴近屏幕底边，
- * 由页面自身布局决定留白（如列表 contentPadding），不受瀑布边距影响。
- *
- * **横屏不生效**：横屏（[LocalConfiguration] 宽 ≥ 高）时一侧受状态栏/导航栏占据、
- * 另一侧也不挡阅读，强行留白纯属浪费。横屏直接返回 [this]，零开销。
- *
- * **全页面一致生效**：包括设置页（[cn.mocabolka.run.ui.components.SettingsPage]），
- * 仅提供左右两侧避让，不引入底部多余 padding。
- *
- * 该安全距离独立于设置页的挖孔屏开关（cutoutAdapt，仅控制摄像头缺口左右避让），始终生效。
+ * ⚠️ 用法铁律：本 Modifier **只能作用在「内容容器」上**。外层根容器必须 `fillMaxSize()` 铺满全屏
+ * （背景色 / 背景图延伸到瀑布区两侧，避免色块割裂）。切勿直接作用在带背景的根 Surface 上，
+ * 否则会内缩整个盒子、露出底层 windowBackground —— 这正是此前关于页 / 权限页色块割裂的真因。
  */
 @Composable
-fun Modifier.waterfallSafePadding(): Modifier {
-    // 横屏跳过：一侧已有状态栏/导航栏占据，另一侧不挡阅读；强行留白纯属浪费。
+fun Modifier.edgeSafePadding(cutoutAdapt: Boolean = false): Modifier {
     val configuration = LocalConfiguration.current
-    if (configuration.screenWidthDp >= configuration.screenHeightDp) return this
-
     val density = LocalDensity.current
     val ltr = LayoutDirection.Ltr
-    // 瀑布弯曲区物理对称，取 Ltr 下的 left/right 即为物理两侧安全距离（与界面 RTL 无关）。
+    val isLandscape = configuration.screenWidthDp >= configuration.screenHeightDp
     val cutout = WindowInsets.displayCutout
-    val leftPx = cutout.getLeft(density, ltr)
-    val rightPx = cutout.getRight(density, ltr)
-    val fallbackPx = with(density) { 12.dp.roundToPx() }
-    val startPx = max(leftPx, fallbackPx)
-    val endPx = max(rightPx, fallbackPx)
-    val startDp = with(density) { startPx.toDp() }
-    val endDp = with(density) { endPx.toDp() }
-    // 仅左右两侧避让；底部不介入，让页面贴边。
-    return this.then(Modifier.padding(start = startDp, end = endDp))
+    val safePx = with(density) { Dimens.waterfallSafe.roundToPx() }
+    return if (isLandscape) {
+        val extraL = if (cutoutAdapt) cutout.getLeft(density, ltr) else 0
+        val extraR = if (cutoutAdapt) cutout.getRight(density, ltr) else 0
+        val start = with(density) { (safePx + extraL).toDp() }
+        val end = with(density) { (safePx + extraR).toDp() }
+        this.then(Modifier.padding(start = start, end = end))
+    } else {
+        val left = maxOf(cutout.getLeft(density, ltr), safePx)
+        val right = maxOf(cutout.getRight(density, ltr), safePx)
+        this.then(Modifier.padding(start = with(density) { left.toDp() }, end = with(density) { right.toDp() }))
+    }
 }
+
+/**
+ * 旧名兼容别名（指向 [edgeSafePadding]，cutoutAdapt 默认关）。新代码请直接用 [edgeSafePadding]。
+ */
+@Composable
+@Deprecated("改用 edgeSafePadding(cutoutAdapt)，统一横竖屏与挖孔适配")
+fun Modifier.waterfallSafePadding(): Modifier = edgeSafePadding()

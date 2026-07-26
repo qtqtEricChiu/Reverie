@@ -12,7 +12,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import cn.mocabolka.run.gamepad.Direction
 import cn.mocabolka.run.ui.theme.Dimens
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 开放源代码许可页面（全屏子页面）。
@@ -26,7 +28,11 @@ fun LicensesPage(
     onBack: () -> Unit,
     listState: LazyListState = rememberLazyListState(),
     /** 右摇杆滚动后引擎回写的首个可视项索引（焦点跟随，见 SubPageScaffold）。 */
-    rightStickFirstVisible: androidx.compose.runtime.State<Int>? = null
+    rightStickFirstVisible: androidx.compose.runtime.State<Int>? = null,
+    /** 左摇杆 / Hat 导航流（焦点跟随，见 SubPageScaffold）。 */
+    navigate: Flow<Direction>? = null,
+    /** 减少动态效果（晕动症）：由宿主 Activity 透传，控制逐行入场动画。 */
+    reduceMotion: Boolean = false
 ) {
     val rows = buildList<SubPageRow> {
         add(
@@ -94,8 +100,10 @@ fun LicensesPage(
         onBack = onBack,
         rows = rows,
         listState = listState,
-        rightStickFirstVisible = rightStickFirstVisible
-    )
+            rightStickFirstVisible = rightStickFirstVisible,
+            navigate = navigate,
+            reduceMotion = reduceMotion
+        )
 }
 
 /** 开源软件组件信息。 */

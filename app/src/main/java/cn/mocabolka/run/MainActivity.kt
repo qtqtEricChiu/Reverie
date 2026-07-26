@@ -7,7 +7,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
+import cn.mocabolka.run.ui.enablePredictiveBack
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -19,6 +19,8 @@ import cn.mocabolka.run.compat.OrientationManager
 import cn.mocabolka.run.gamepad.GamepadEvent
 import cn.mocabolka.run.gamepad.GamepadManager
 import cn.mocabolka.run.ui.DisplayRefresh
+import cn.mocabolka.run.ui.Haptics
+import cn.mocabolka.run.ui.HapticIntensity
 import cn.mocabolka.run.ui.HomeScreen
 import cn.mocabolka.run.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
@@ -49,7 +51,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        gamepad = GamepadManager { event: GamepadEvent -> viewModel.pushEvent(event) }
+        gamepad = GamepadManager { event: GamepadEvent -> viewModel.pushGamepadEvent(event) }
+
+        // 初始化全局触觉引擎（单例），注入手柄震动总开关
+        Haptics.init(this, viewModel.settings.hapticIntensity)
 
         maybeShowCompatGuide()
 
@@ -61,6 +66,9 @@ class MainActivity : ComponentActivity() {
                     // 搜索页焦点目标状态机：INPUT 态禁用手柄导航（让位 IME），LIST 态恢复导航
                     viewModel.searchFocusTarget.collect { target ->
                         gamepad.navigationEnabled = target == cn.mocabolka.run.viewmodel.SearchFocusTarget.LIST
+                        // 搜索 INPUT 态：仅放行左摇杆 DOWN 作为「焦点贯通」手势（从输入框无缝进入列表），
+                        // 不抢占 IME 的 UP/LEFT/RIGHT 方向（保持文本光标 / 软键盘导航）。
+                        gamepad.searchInputExitDown = target == cn.mocabolka.run.viewmodel.SearchFocusTarget.INPUT
                     }
                 }
                 // Dialog 层级监听：任何 dialog 打开时设置 dialogActive=true，
@@ -73,11 +81,24 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 // 设置页为 HomeScreen 内自定义焦点页（非系统弹窗），其 A/B/方向键/右摇杆
-                // 由 HomeScreen 的事件循环统一驱动，故 passthrough=false 以避免系统焦点干扰；
-                // 非设置页面时保持 passthrough=true 让系统处理返回手势与 IME 等默认行为。
+                // 由 HomeScreen 的事件循环统一驱动。务必保持 passthrough=false，
+                // 否则 GamepadManager.handleKeyEvent/handleMotionEvent 会直接 return false，
+                // 事件被交还给系统、不再推入 ViewModel 事件流 —— 导致设置页内 LT/RT 切 Tab、
+                // 方向键导航、A 确认等全部失效（回归修复）。
+                // 普通 Tab（主/统计/搜索/设置）均依赖 GamepadManager 消费事件，故恒为 false；
+                // 返回手势由 OnBackPressedDispatcher、IME 由 Compose 单独处理，无需 passthrough=true。
                 launch {
-                    viewModel.settingsOpen.collect { open ->
-                        gamepad.passthrough = open
+                    viewModel.settingsOpen.collect { _ ->
+                        gamepad.passthrough = false
+                    }
+                }
+                // 行为设置：启动游戏后不保留 Reverie 进程。
+                // launchApp 成功且开启该开关时发射 exitAfterLaunch，此处销毁本任务，
+                // 使 Reverie 不留在后台/最近任务。稍候再 finish，让目标应用先接管前台。
+                launch {
+                    viewModel.exitAfterLaunch.collect {
+                        kotlinx.coroutines.delay(300)
+                        finishAndRemoveTask()
                     }
                 }
                 // 挖孔屏适配：监听设置项变化，实时切换 cutout mode
@@ -95,14 +116,7 @@ class MainActivity : ComponentActivity() {
         // 绘制预测动画，松手后才回调本 callback。我们将其转成 GamepadEvent.Back 推入事件流，
         // 复用 HomeScreen 现有的"二次确认气泡"逻辑（首次返回弹气泡、再次返回才退出），
         // 避免系统默认 finish() 绕过二次确认直接退出 Reverie。
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    viewModel.pushEvent(GamepadEvent.Back)
-                }
-            }
-        )
+        enablePredictiveBack { viewModel.pushEvent(GamepadEvent.Back) }
 
         setContent {
             HomeScreen(viewModel = viewModel, onExit = { finish() })
@@ -156,7 +170,8 @@ class MainActivity : ComponentActivity() {
     private fun maybeShowCompatGuide() {
         val prefs = getSharedPreferences("landscape", MODE_PRIVATE)
         if (!prefs.getBoolean("compat_guide_shown", false)) {
-            prefs.edit().putBoolean("compat_guide_shown", true).apply()
+            // commit（同步落盘）：避免进程被杀后 apply 未写入导致向导重复弹出
+            prefs.edit().putBoolean("compat_guide_shown", true).commit()
             startActivity(Intent(this, CompatGuideActivity::class.java))
         }
     }
@@ -165,13 +180,6 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // R13：任意按键视为交互，刷新时间戳以维持在高刷新率
         if (event.action == KeyEvent.ACTION_DOWN) markInteraction()
-        // 系统返回键（导航栏 / 实体返回键）：转为 GamepadEvent.Back，复用 HomeScreen 的
-        // 二次确认退出逻辑，避免 super 默认 finish() 绕过二次确认直接关掉 Reverie。
-        // 手柄 B 键走 GamepadManager(XboxMapping -> GamepadEvent.Back)，此处仅兜底层返回键。
-        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-            if (event.action == KeyEvent.ACTION_UP) viewModel.pushEvent(GamepadEvent.Back)
-            return true
-        }
         return if (gamepad.handleKeyEvent(event)) true else super.dispatchKeyEvent(event)
     }
 

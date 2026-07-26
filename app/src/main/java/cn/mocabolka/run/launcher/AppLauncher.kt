@@ -22,12 +22,13 @@ class AppLauncher(private val context: Context) {
      */
     fun launch(app: AppModel, user: UserHandle = android.os.Process.myUserHandle()): Boolean {
         val component = ComponentName(app.packageName, app.className)
-        // 优先通过 LauncherApps 启动（对多用户/工作资料等场景最可靠）
-        val canUseLauncherApps = launcherApps != null && app.className.isNotEmpty() &&
-                runCatching { launcherApps!!.isActivityEnabled(component, user) }.getOrDefault(false)
-        if (canUseLauncherApps) {
+        // 优先通过 LauncherApps 启动（对多用户/工作资料等场景最可靠）；局部快照消除 !!
+        val la = launcherApps
+        val canUseLauncherApps = la != null && app.className.isNotEmpty() &&
+                runCatching { la.isActivityEnabled(component, user) }.getOrDefault(false)
+        if (canUseLauncherApps && la != null) {
             return try {
-                launcherApps!!.startMainActivity(component, user, null, null)
+                la.startMainActivity(component, user, null, null)
                 true
             } catch (e: SecurityException) {
                 Log.w("AppLauncher", "LauncherApps 启动被拒绝: $component", e)

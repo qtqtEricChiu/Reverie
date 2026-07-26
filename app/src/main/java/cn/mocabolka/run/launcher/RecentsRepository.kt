@@ -59,8 +59,5 @@ class RecentsRepository(private val context: Context) {
         }.getOrNull() ?: emptyList()
     }
 
-        companion object {
-            /** 图标最大边长（px），与 AppRepository 保持一致（R13 降为 96 以降低内存峰值）。 */
-            private const val ICON_MAX = 96
-        }
+        // ICON_MAX 统一使用 launcher 包内共享常量（定义于 AppRepository.kt），消除重复定义漂移风险
 }

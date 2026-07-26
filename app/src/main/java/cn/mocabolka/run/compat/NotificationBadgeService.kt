@@ -17,13 +17,18 @@ class NotificationBadgeService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) = publish()
     override fun onNotificationRemoved(sbn: StatusBarNotification?) = publish()
+    override fun onListenerConnected() = publish() // 服务重连后立即重建角标，避免旧数据滞留
 
     private fun publish() {
-        val map = getActiveNotifications()
-            .orEmpty()
-            .groupBy { it.packageName }
-            .mapValues { it.value.size }
-        BadgeStore.update(map)
+        // getActiveNotifications 在未连接/系统抖动时可能抛 SecurityException/RuntimeException；
+        // 回调线程异常会导致监听服务崩溃重连，必须整体兜底。
+        runCatching {
+            val map = getActiveNotifications()
+                .orEmpty()
+                .groupBy { it.packageName }
+                .mapValues { it.value.size }
+            BadgeStore.update(map)
+        }.onFailure { android.util.Log.w("NotificationBadge", "角标聚合失败: ${it.message}") }
     }
 
     companion object {

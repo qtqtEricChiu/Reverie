@@ -4,10 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import cn.mocabolka.run.ui.enablePredictiveBack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -42,9 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
+import cn.mocabolka.run.ui.setupEdgeToEdgeImmersive
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -58,7 +56,11 @@ import cn.mocabolka.run.ui.components.SubPageScaffold
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
 import cn.mocabolka.run.ui.theme.Success
-import cn.mocabolka.run.gamepad.SubPageGamepad
+import cn.mocabolka.run.gamepad.Direction
+import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import cn.mocabolka.run.ui.game.GameScreenshots
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 
 /**
  * 权限引导页（部分设备需额外系统权限配置）。
@@ -72,58 +74,64 @@ import cn.mocabolka.run.gamepad.SubPageGamepad
  */
 class CompatGuideActivity : ComponentActivity() {
     /** 右摇杆滚动引擎。 */
-    private lateinit var subPageGamepad: SubPageGamepad
+    private lateinit var subPageGamepad: SubPageGamepadHost
     /** 列表状态提升到 Activity 字段，供右摇杆滚动引擎访问（CompatGuideScreen 内 listState 由此传入）。 */
     private lateinit var listState: LazyListState
     /** 右摇杆滚动后引擎回写的首个可视项索引（焦点跟随桥梁）。 */
     private val rightStickFirstVisible = kotlinx.coroutines.flow.MutableStateFlow(-1)
+    /** 左摇杆 / Hat 导航事件桥梁：SubPageGamepad.onNavigate 推入，SubPageScaffold 订阅驱动焦点。 */
+    private val navFlow = MutableSharedFlow<Direction>(extraBufferCapacity = 16)
+    /** 兼容向导设置仓库（供 SAF 授权结果回调标记完成）。 */
+    private lateinit var settings: SettingsRepository
+    /** 截图文件夹持久化存储（判定"已授权"状态）。 */
+    private val screenshotStore by lazy { GameScreenshots.Store(this) }
+    /** 截图文件夹授权启动器（SAF ACTION_OPEN_DOCUMENT_TREE）。 */
+    private lateinit var treeLauncher: ActivityResultLauncher<Uri?>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         listState = LazyListState()
-        subPageGamepad = SubPageGamepad(
+        subPageGamepad = SubPageGamepadHost(
             lifecycleScope,
             getState = { listState },
-            onFocusSync = { rightStickFirstVisible.value = it }
+            getFirstVisibleItemIndex = { listState.firstVisibleItemIndex },
+            onFocusSync = { rightStickFirstVisible.value = it },
+            onNavigate = { dir -> navFlow.tryEmit(dir) }
         )
         subPageGamepad.start()
-        // 沉浸式：隐藏状态栏，全屏显示权限引导（跟随 Splash 沉浸风格）
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.statusBars())
-            systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        // 沉浸式 + 边缘到边缘（统一预测性返回手势窗口配置）
+        setupEdgeToEdgeImmersive(hideStatusBar = false)
         // 预测返回手势（minSdk=36 恒生效）：注册回调，用户从屏幕左/右边缘向内滑动时系统
         // 绘制预测动画，松手后此处执行关闭，兼容向导支持系统级返回退出。
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    finish()
-                }
-            }
-        )
+        enablePredictiveBack { finish() }
 
-        val settings = SettingsRepository(this)
+        settings = SettingsRepository(this)
+        // 截图文件夹授权（SAF ACTION_OPEN_DOCUMENT_TREE）：用户选定后持久化 URI 并标记完成。
+        treeLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri != null) {
+                runCatching {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+                screenshotStore.setTreeUri(uri)
+                settings.setCompatDone(CompatItem.SCREENSHOT, true)
+            }
+        }
         setContent {
             // 跟随设置-主题切换（深色/浅色/AMOLED），使用 LandscapeTheme 统一主题
-            LandscapeTheme(
-                darkTheme = when (settings.darkMode) {
-                    cn.mocabolka.run.ui.DarkMode.LIGHT -> false
-                    cn.mocabolka.run.ui.DarkMode.AMOLED -> true
-                    else -> androidx.compose.foundation.isSystemInDarkTheme()
-                },
-                useMonet = settings.useMonet,
-                isAmoled = settings.darkMode == cn.mocabolka.run.ui.DarkMode.AMOLED
-            ) {
+            LandscapeTheme(settings = settings) {
                 val rsFocus = rightStickFirstVisible.collectAsState()
                 CompatGuideScreen(
                     context = this,
-                    settings = SettingsRepository(this),
+                    settings = settings,
                     onClose = { finish() },
                     listState = listState,
-                    rightStickFirstVisible = rsFocus
+                    rightStickFirstVisible = rsFocus,
+                    navigate = navFlow,
+                    screenshotStore = screenshotStore,
+                    onRequestScreenshot = { treeLauncher.launch(null) }
                 )
             }
         }
@@ -148,7 +156,13 @@ private fun CompatGuideScreen(
     settings: SettingsRepository,
     onClose: () -> Unit,
     listState: LazyListState,
-    rightStickFirstVisible: State<Int>? = null
+    rightStickFirstVisible: State<Int>? = null,
+    /** 左摇杆 / Hat 导航流（焦点跟随，见 SubPageScaffold）。 */
+    navigate: Flow<Direction>? = null,
+    /** 截图文件夹持久化存储（判定"已授权"状态）。 */
+    screenshotStore: GameScreenshots.Store,
+    /** 触发截图文件夹 SAF 授权。 */
+    onRequestScreenshot: () -> Unit
 ) {
     val owner = LocalLifecycleOwner.current
     var refresh by remember { mutableStateOf(0) }
@@ -164,19 +178,18 @@ private fun CompatGuideScreen(
     // 与 About / Licenses 完全一致的入场动画由根 AnimatedVisibility 提供（见下方）。
     androidx.compose.animation.AnimatedVisibility(
         visible = true,
-        enter = androidx.compose.animation.fadeIn(
-            animationSpec = cn.mocabolka.run.ui.theme.MotionSpec.Medium
-        ) + androidx.compose.animation.slideInHorizontally(
-            animationSpec = cn.mocabolka.run.ui.theme.MotionSpec.SlideOffset,
-            initialOffsetX = { it / 6 }
-        )
+        // 沉浸子页入场统一走「动画机列表」subPageEnter。
+        enter = cn.mocabolka.run.ui.theme.MotionMachines.subPageEnter(reduceMotion = false)
     ) {
         key(refresh) {
-            val battery = BatteryOptimizationHelper.isIgnoring(context)
-            val usage = UsageStatsPermissionHelper.isGranted(context)
-            val overlay = OverlayPermissionHelper.canDraw(context)
-            val notification = NotificationBadgeService.isEnabled(context)
+            // remember(refresh)：权限状态查询走 Binder IPC，仅在 refresh 计数变化时重查，
+            // 避免每次重组（滚动/焦点移动）都发起 6 次系统调用
+            val battery = remember(refresh) { BatteryOptimizationHelper.isIgnoring(context) }
+            val usage = remember(refresh) { UsageStatsPermissionHelper.isGranted(context) }
+            val overlay = remember(refresh) { OverlayPermissionHelper.canDraw(context) }
+            val notification = remember(refresh) { NotificationBadgeService.isEnabled(context) }
             val autostart = false
+            val screenshotGranted = remember(refresh) { screenshotStore.getTreeUri() != null }
 
             val items = listOf(
                 CompatItemData(CompatItem.BATTERY, "电池优化白名单", battery,
@@ -184,7 +197,7 @@ private fun CompatGuideScreen(
                         BatteryOptimizationHelper.requestIgnore(context)
                         settings.setCompatDone(CompatItem.BATTERY, true)
                     },
-                    "允许后台运行"),
+                    "允许后台运行 · 电池设置"),
                 CompatItemData(CompatItem.AUTOSTART, "自启动 / 后台保活", autostart,
                     {
                         runCatching {
@@ -197,28 +210,35 @@ private fun CompatGuideScreen(
                         }
                         settings.setCompatDone(CompatItem.AUTOSTART, true)
                     },
-                    if (isColorOS) "本应用设置页" else "系统设置手动开启"),
+                    if (isColorOS) "后台保活 · 应用设置页" else "后台保活 · 系统设置"),
                 CompatItemData(CompatItem.OVERLAY, "悬浮窗权限", overlay,
                     {
                         if (OverlayPermissionHelper.request(context)) {
                             settings.setCompatDone(CompatItem.OVERLAY, true)
                         }
                     },
-                    "强制横屏系统级锁定所需"),
+                    "强制横屏锁定 · 悬浮窗设置"),
                 CompatItemData(CompatItem.USAGE, "使用情况访问", usage,
                     {
                         UsageStatsPermissionHelper.openSettings(context)
                         settings.setCompatDone(CompatItem.USAGE, true)
                     },
-                    "最近使用列表所需"),
+                    "最近游玩列表 · 使用情况设置"),
                 CompatItemData(CompatItem.NOTIFICATION, "通知监听（角标）", notification,
                     {
                         ColorOSCompat.openNotificationListenerSettings(context)
                         settings.setCompatDone(CompatItem.NOTIFICATION, true)
                     },
-                    "系统设置开启")
+                    "通知角标 · 通知监听设置"),
+                CompatItemData(CompatItem.SCREENSHOT, "截图文件夹访问", screenshotGranted,
+                    onRequestScreenshot,
+                    "游戏截图归类 · 截图文件夹")
             )
-            items.forEach { if (it.granted) settings.setCompatDone(it.key, true) }
+            // SP 写入是副作用，移入 LaunchedEffect：重组体内直接写盘违反组合纯函数原则且反复执行
+            val grantedKeys = items.filter { it.granted }.map { it.key }
+            LaunchedEffect(grantedKeys) {
+                grantedKeys.forEach { settings.setCompatDone(it, true) }
+            }
             val doneCount = items.count { it.granted || settings.isCompatDone(it.key) }
             val total = items.size
 
@@ -290,7 +310,9 @@ private fun CompatGuideScreen(
                 ),
                 rows = rows,
                 listState = listState,
-                rightStickFirstVisible = rightStickFirstVisible
+                rightStickFirstVisible = rightStickFirstVisible,
+                navigate = navigate,
+                reduceMotion = settings.reduceMotion
             )
         }
     }

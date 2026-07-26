@@ -99,6 +99,39 @@ object Dimens {
     // 窄屏判定阈值（screenWidthDp < 此值时指标卡改为 2 列网格）
     const val NarrowScreenThresholdDp = 480
 
+    // ── GamePage 断点尺寸（2026-07-15 GamePage UI 改进方案，第八/七章）──
+    // Hero 横幅高度（按断点递增）
+    val HeroCompact = 180.dp
+    val HeroMedium = 220.dp
+    val HeroCompactLand = 240.dp
+    val HeroMediumLand = 280.dp
+    val HeroExpanded = 360.dp
+    val HeroXL = 420.dp
+
+    // Capsule 竖版海报宽度（按断点递增；CompactPortrait = 0 即收起）
+    val CapsuleMediumPortrait = 130.dp
+    val CapsuleCompactLand = 180.dp
+    val CapsuleMediumLand = 220.dp
+    val CapsuleExpanded = 220.dp
+    val CapsuleXL = 280.dp
+
+    // 启动按钮高度
+    val LaunchButtonHeight = 56.dp
+    val LaunchButtonHeightExpanded = 60.dp
+    val LaunchButtonHeightXL = 64.dp
+
+    // 电视大屏焦点环（ExtraLargeLandscape 专用，避免 1-2dp 偏细）
+    val FocusBorderWidthXL = 4.dp
+    val FocusGlowRadiusXL = 16.dp
+
+    /**
+     * 断点化屏幕外边距（方案第七章）：对齐 MD3 WindowSizeClass。
+     * - < 1600dp：24.dp（Compact/Medium/Expanded 统一）
+     * - ≥ 1600dp（TV）：48.dp，远观需宽边距
+     * 保留 [ScreenPadding]=24.dp 语义不变，新增此查询以适配电视大屏。
+     */
+    fun screenPaddingFor(widthDp: Int): Dp = if (widthDp >= 1600) 48.dp else ScreenPadding
+
     // 瀑布屏（曲面屏）两侧最小安全余量：叠加在 displayCutout 左右 inset 之上，
     // 保证曲面边缘不被光学扭曲、避免边缘误触。普通直屏设备 cutout 为 0，仅留此值。
     // 仅在竖屏生效（横屏两侧曲面已被系统状态栏/导航栏优先占据，无需二次适配）。
@@ -108,6 +141,8 @@ object Dimens {
     // ── 标准化页面模板（2026-07-13 专项：四页统一基线）──
     // 全屏统一水平外边距：所有页面根容器统一引用，消除左右边距漂移。
     val ContentHorizontal = 16.dp
+    // 归一化标题栏标准高度（基准 = 权限页子页面标题栏）：所有子页面统一引用，消除高度漂移。
+    val SubPageTopBarHeight = 56.dp
     // 标题栏（StatusBar）到页面内容顶部的标准净距（不含 StatusBar 自身 xxs padding）。
     val HeaderToContent = 16.dp
     // 底部按键指示栏标准高度（横屏模式下底部外边距强制为 0，栏自身高度占位）。

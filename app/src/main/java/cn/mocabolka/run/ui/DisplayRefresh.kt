@@ -14,7 +14,12 @@ import android.view.Window
  * 若本屏最高刷新率本就不高于 60Hz，则回落到该屏最低刷新率。
  */
 object DisplayRefresh {
-    /** 交互态：请求本分辨率下的最高刷新率。 */
+    /** 交互态请求的最高刷新率上限（Hz）。Reverie 在交互时请求高刷以获得满血手感，
+     *  但封顶 185Hz——亮度/功耗随刷新率超线性增长，185Hz 已远超肉眼可辨，
+     *  继续冲 200+Hz 只徒增功耗与发热（R13）。 */
+    private const val MAX_HIGH_REFRESH_HZ = 185f
+
+    /** 交互态：请求本分辨率下不超过上限的最高刷新率。 */
     fun applyHigh(window: Window) = apply(window, high = true)
 
     /** 空闲态：回落到平衡刷新率（最接近 60Hz）。 */
@@ -30,7 +35,10 @@ object DisplayRefresh {
             it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
         }.takeIf { it.isNotEmpty() } ?: modes
         val target = if (high) {
-            sameRes.maxByOrNull { it.refreshRate }
+            // 交互态：在 ≤185Hz 的候选中取最高；若本屏无 ≤185Hz 模式（极罕见），回退到屏上最高。
+            sameRes.filter { it.refreshRate <= MAX_HIGH_REFRESH_HZ }
+                .maxByOrNull { it.refreshRate }
+                ?: sameRes.maxByOrNull { it.refreshRate }
         } else {
             // 平衡模式：优先最接近 60Hz，避免直接掉到最低导致可见卡顿
             sameRes.minByOrNull { kotlin.math.abs(it.refreshRate - 60f) }

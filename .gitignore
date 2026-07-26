@@ -3,9 +3,11 @@ build/
 **/build/
 .gradle/
 **/.gradle/
-.gradlew
-.gradlew.bat
 local.properties
+
+# Excluded source sets / assets (not part of the public source repo)
+app/src/debug/
+app/src/main/assets/gameart/
 
 # Compiled artifacts
 *.dex

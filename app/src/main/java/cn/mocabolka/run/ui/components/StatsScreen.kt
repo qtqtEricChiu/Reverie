@@ -2,7 +2,13 @@ package cn.mocabolka.run.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,10 +39,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DatePicker
@@ -66,12 +78,21 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import cn.mocabolka.run.gamepad.Direction
 import cn.mocabolka.run.launcher.UsageStatsRepository
+import cn.mocabolka.run.launcher.AppModel
 import cn.mocabolka.run.ui.theme.AccentIconSquare
 import cn.mocabolka.run.ui.theme.AnimatedNumberText
 import cn.mocabolka.run.ui.theme.ChartAccent
@@ -135,6 +156,37 @@ class StatsDatePickerBridge(
     var jumpToAnchor: () -> Unit = {}
 )
 
+/**
+ * 统计页手柄焦点区（二维寻址，手柄全链路重构）。
+ * - RANK：左栏应用排行（左摇杆焦点，保留既有肌肉记忆，进页默认区）。
+ * - OVERVIEW：右栏总览控件区（周期/日期/视图/指标滑块）。此前手柄完全无法触达这些控件，
+ *   是真正的"按钮点不了"功能死区；本区即零死区改造入口。
+ */
+enum class StatsFocusZone { RANK, OVERVIEW }
+
+/**
+ * 总览控件焦点槽序号（OVERVIEW 区内 UP/DOWN 遍历顺序）。
+ * 指标槽仅在"日周期·今天"存在，故实际可聚焦数由 [StatsControlBridge.overviewSlotCount] 动态给出。
+ */
+object StatsOverviewSlot {
+    const val PERIOD = 0
+    const val DATE = 1
+    const val VIEW = 2
+    const val METRIC = 3
+}
+
+/**
+ * 统计页控件桥（对齐 [StatsDatePickerBridge] 设计）：StatsScreen 把内部"切视图 / 切指标"能力
+ * 与"当前可聚焦控件数"注册进来，供 HomeScreen 手柄 A 键按焦点槽精准分发，
+ * 无需把 viewMode / metricMode 提升出组件即可实现整体 UI 手柄可达。
+ */
+class StatsControlBridge {
+    var toggleView: () -> Unit = {}
+    var toggleMetric: () -> Unit = {}
+    /** 当前 OVERVIEW 区可聚焦控件数（3=周期/日期/视图；4=再+指标，仅日·今天）。 */
+    var overviewSlotCount: Int = 3
+}
+
 @Composable
 fun StatsScreen(
     viewModel: HomeViewModel,
@@ -159,37 +211,65 @@ fun StatsScreen(
     focusIndex: Int = 0,
     /** 手柄是否已连接：仅此为真时显示 LB/RB 与十字键位浮块。 */
     gamepadConnected: Boolean = false,
+    /** 焦点项包名回传（P1-2）：左摇杆导航改变 focusIndex 时上报当前聚焦排行项，供 A 键启动。 */
+    onFocus: (String?) -> Unit = {},
     /** 实际排行条目数上报（HomeScreen 用于限制左摇杆焦点上限，避免空行焦点）。 */
     onEntryCountChange: (Int) -> Unit = {},
     /** 周期切换回调（PeriodTabsRow 触控点击 / 父级 LB/RB 都路由到这里）。 */
     onSelectPeriod: (StatsPeriod) -> Unit = {},
+    /** 点击排行条目（触控）：用于启动对应应用。 */
+    onEntryClick: (String) -> Unit = {},
+    /** 挖孔屏适配开关：透传给内部 dialog，使底部提示栏与统计页主体保持一致的左右安全边距。 */
+    cutoutAdapt: Boolean = false,
+    /** 手柄焦点区（RANK=左栏排行 / OVERVIEW=右栏总览控件）。手柄全链路重构。 */
+    focusZone: StatsFocusZone = StatsFocusZone.RANK,
+    /** OVERVIEW 区当前聚焦控件槽（见 [StatsOverviewSlot]）。 */
+    overviewFocusIndex: Int = 0,
+    /** 控件桥：StatsScreen 注册切视图/切指标能力与可聚焦控件数，供父级 A 键分发。 */
+    control: StatsControlBridge? = null,
     modifier: Modifier = Modifier
 ) {
     // 周期由外部驱动（HomeScreen 持有），StatsScreen 不再维护内部 var
     val activePeriod = period
     val usageGranted by viewModel.usageGranted.collectAsState()
     val apps by viewModel.apps.collectAsState()
+    // reportsVersion：后台 sync 完成后自增，作为数据重读 key，保证统计页读到最新报表
+    val reportsVersion by viewModel.reportsVersion.collectAsState()
     // 进入统计页时刷新一次（带时间闸门节流，避免每次切 Tab 都全量 sync，R13 省电）
     LaunchedEffect(Unit) { viewModel.refreshReportsThrottled() }
 
     // 报表按"当前周期 + 锚点日"实时计算（非快照 StateFlow，便于自由选任意日期）
-    val anchorKey = remember(anchorMs, activePeriod) { anchorMs to activePeriod }
+    // reportsVersion 加入 key：sync 完成（数据刷新）后强制重算，避免读到 sync 前的旧数据
+    val anchorKey = remember(anchorMs, activePeriod, reportsVersion) { anchorMs to activePeriod to reportsVersion }
     val dailyReport = remember(anchorKey) { viewModel.dailyReportFor(dateKeyOf(anchorMs)) }
     val weeklyReport = remember(anchorKey) { viewModel.weeklyReportFor(anchorMs) }
     val monthlyReport = remember(anchorKey) { viewModel.monthlyReportFor(anchorMs) }
     val yearlyReport = remember(anchorKey) { viewModel.yearlyReportFor(anchorMs) }
 
-    val reportEntries = viewModel.collapseSystemApps(
-        when (activePeriod) {
-            StatsPeriod.DAILY -> dailyReport
-            StatsPeriod.WEEKLY -> weeklyReport
-            StatsPeriod.MONTHLY -> monthlyReport
-            StatsPeriod.YEARLY -> yearlyReport
-        }
-    )
+    val reportEntries = remember(anchorKey, apps) {
+        viewModel.collapseSystemApps(
+            when (activePeriod) {
+                StatsPeriod.DAILY -> dailyReport
+                StatsPeriod.WEEKLY -> weeklyReport
+                StatsPeriod.MONTHLY -> monthlyReport
+                StatsPeriod.YEARLY -> yearlyReport
+            }
+        )
+    }
     // 上报实际排行条目数（含"系统应用"聚合项），供 HomeScreen 限制左摇杆焦点上限
     LaunchedEffect(reportEntries.size) { onEntryCountChange(reportEntries.size) }
     val totalMs = reportEntries.sumOf { it.ms }
+    val totalCount = reportEntries.sumOf { it.count }
+    // 日均（副标题）：本期总时长按周期天数均摊，供「总计」指标卡展示。
+    val daysInPeriod = when (activePeriod) {
+        StatsPeriod.DAILY -> 1
+        StatsPeriod.WEEKLY -> 7
+        StatsPeriod.MONTHLY -> java.util.Calendar.getInstance().apply { timeInMillis = anchorMs }
+            .getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+        StatsPeriod.YEARLY -> 365
+    }
+    val avgPerDayMs = if (totalMs > 0) totalMs / daysInPeriod else 0L
+    val avgSubtitle = if (avgPerDayMs > 0) "日均 ${formatHours(avgPerDayMs)}" else null
     // 指标：排除置底的"系统应用"聚合项，仅统计真实用户应用
     val rankedEntries = reportEntries.filter { it.packageName != cn.mocabolka.run.viewmodel.HomeViewModel.SYSTEM_AGGREGATE_PKG }
     val appCount = rankedEntries.count { it.ms > 0L }
@@ -199,27 +279,192 @@ fun StatsScreen(
 
     // 小时柱状图（仅在日周期"今天"使用，其它情况显示对应日序列）
     val isAnchorToday = remember(anchorMs, activePeriod) { viewModel.isAnchorToday(anchorMs) }
-    val hourly = remember(activePeriod, isAnchorToday) {
-        if (activePeriod == StatsPeriod.DAILY && isAnchorToday) viewModel.hourlyToday() else LongArray(0)
+    // 指标切换：使用时长 / 启动次数（仅日周期"今天"可切换，其它周期强制时长）
+    var metricMode by remember { mutableStateOf(StatMetricMode.Duration) }
+    // 视图切换：图表 / 列表（图标 toggle，所有周期可用；仅展示其一，节省纵向空间）
+    var viewMode by remember { mutableStateOf(StatViewMode.Chart) }
+    val hourlyModeActive = activePeriod == StatsPeriod.DAILY && isAnchorToday
+
+    // 手柄控件桥注册（手柄全链路重构）：每次重组刷新闭包，保证 HomeScreen 的 A 键
+    // 调用命中最新 viewMode/metricMode 与当前周期；指标仅日·今天可切，故槽数动态 3/4。
+    control?.let { c ->
+        androidx.compose.runtime.SideEffect {
+            c.toggleView = {
+                viewMode = if (viewMode == StatViewMode.Chart) StatViewMode.List else StatViewMode.Chart
+            }
+            c.toggleMetric = {
+                if (hourlyModeActive) {
+                    metricMode = if (metricMode == StatMetricMode.Duration) StatMetricMode.Count else StatMetricMode.Duration
+                }
+            }
+            c.overviewSlotCount = if (hourlyModeActive) 4 else 3
+        }
+    }
+    // 进入 OVERVIEW 区时把右栏滚到顶，保证周期/日期/视图/指标控件可见（控件均在总览顶部）。
+    androidx.compose.runtime.LaunchedEffect(focusZone) {
+        if (focusZone == StatsFocusZone.OVERVIEW) leftScrollState.animateScrollTo(0)
+    }
+    // 逐小时明细（时长 / 次数 / 每应用）：直接命中按天持久化快照，
+    // 避免「点过往再回今天」时的小时数据被重置（需求 #5）。
+    val hourlyKey = remember(anchorMs) { dateKeyOf(anchorMs) }
+    // reportsVersion 参与 remember key：后台 sync 完成后重读当日小时明细（hourlyKey 本身仍是纯日期）
+    // 关键修复：hourlyModeActive 必须纳入 key。否则从非 DAILY 切到 DAILY（anchor 仍是今天、
+    // hourlyKey 不变）时，下方 remember 不会重算，仍保留 hourlyModeActive=false 时的 LongArray(0)
+    // 占位值；而 playtimeRows 的 key 含 hourlyModeActive 会重算并进入 DAILY+hourly 分支直接
+    // hourlyMs[h] 越界（ArrayIndexOutOfBoundsException length=0 index=0 @ L310）。
+    // 同时非激活态统一返回长度 24 的零数组（而非长度 0），保证任意索引安全。
+    val hourlyMs = remember(hourlyKey, reportsVersion, hourlyModeActive) {
+        if (hourlyModeActive) viewModel.hourlyForDate(hourlyKey).ms else LongArray(24)
+    }
+    val hourlyCnt = remember(hourlyKey, reportsVersion, hourlyModeActive) {
+        if (hourlyModeActive) viewModel.hourlyForDate(hourlyKey).count else IntArray(24)
+    }
+    val hourlyBreak = remember(hourlyKey, reportsVersion, hourlyModeActive) {
+        if (hourlyModeActive) viewModel.hourlyForDate(hourlyKey).breakdown else Array(24) { emptyMap() }
     }
     val daySeries = remember(anchorKey) {
         viewModel.daySeriesFor(activePeriod, anchorMs)
     }
+    // 指标维度：时长 / 次数（日周月年全部生效，切换后图表与列表共用同一维度）
+    val useCount = metricMode == StatMetricMode.Count
+    // 图表标题与数值（随指标模式切换，图表与列表共用同一标题/数据）
+    val metricWord = if (useCount) "启动次数" else "时长"
+    val chartTitle = when (activePeriod) {
+        StatsPeriod.DAILY -> if (hourlyModeActive) "今日各小时$metricWord" else "当日游玩$metricWord"
+        StatsPeriod.WEEKLY -> "本周每日$metricWord"
+        StatsPeriod.MONTHLY -> "本月每日$metricWord"
+        StatsPeriod.YEARLY -> "本年每月$metricWord"
+    }
+    val chartValues = if (hourlyModeActive)
+        (if (useCount) hourlyCnt.map { it.toLong() }.toLongArray() else hourlyMs)
+    else if (useCount) viewModel.dayCountSeriesFor(activePeriod, anchorMs).map { it.toLong() }.toLongArray()
+    else daySeries
+
+    // ── 环比上期（图表叠加对比）& 排行维度排序 & 洞察 ──
+    val prevAnchorMs = remember(anchorMs, activePeriod) {
+        shiftAnchorByPeriod(anchorMs, activePeriod, -1)
+    }
+    val prevValues: LongArray = remember(prevAnchorMs, activePeriod, useCount, hourlyModeActive, hourlyKey) {
+        if (hourlyModeActive) {
+            val pk = dateKeyOf(shiftAnchorByPeriod(anchorMs, StatsPeriod.DAILY, -1))
+            val h = viewModel.hourlyForDate(pk)
+            if (useCount) h.count.map { it.toLong() }.toLongArray() else h.ms
+        } else {
+            if (useCount) viewModel.dayCountSeriesFor(activePeriod, prevAnchorMs)
+                .map { it.toLong() }.toLongArray()
+            else viewModel.daySeriesFor(activePeriod, prevAnchorMs)
+        }
+    }
+    val rankEntries = remember(reportEntries, useCount) {
+        val sysPkg = cn.mocabolka.run.viewmodel.HomeViewModel.SYSTEM_AGGREGATE_PKG
+        val sys = reportEntries.filter { it.packageName == sysPkg }
+        val users = reportEntries.filter { it.packageName != sysPkg }
+            .sortedByDescending { if (useCount) it.count.toLong() else it.ms }
+        users + sys
+    }
+
+    // 每天游玩时长列表（日视图升序 00:00→23:00，周/月逐日，年逐月）。
+    // 按当前指标模式取值，隐藏 0 值项；附该时段 Top3 应用图标。
+    val playtimeTitle = chartTitle
+    val playtimeRows = remember(activePeriod, anchorMs, hourlyModeActive, metricMode, hourlyMs, hourlyCnt, hourlyBreak) {
+        // 隐藏「无信息」与「未来」的列表项：月/年视图下跨度为自然周期，
+        // 未来天/月尚未产生数据、历史中 0 值的天/月也视为空 → 直接不展示。
+        val now = System.currentTimeMillis()
+        when (activePeriod) {
+            StatsPeriod.DAILY -> if (hourlyModeActive) {
+                (0..23).mapNotNull { h ->
+                    val v = if (useCount) hourlyCnt.getOrElse(h) { 0 }.toLong() else hourlyMs.getOrElse(h) { 0L }
+                    if (v <= 0L) return@mapNotNull null
+                    val top = hourlyBreak.getOrNull(h)
+                        ?.entries
+                        ?.sortedByDescending { if (useCount) it.value.second.toLong() else it.value.first }
+                        ?.take(3)?.map { it.key } ?: emptyList()
+                    PlaytimeRow("%02d:00".format(h), v, top, h)
+                }
+            } else {
+                val list = if (useCount) viewModel.dailyCountList(1, anchorMs) else viewModel.dailyUsageList(1, anchorMs)
+                list.map { (d, v) -> PlaytimeRow(formatDayLabel(d), v.toLong(), viewModel.dayAppTop(d), -1) }
+            }
+            StatsPeriod.WEEKLY -> {
+                val list = if (useCount) viewModel.weekDailyCountList(anchorMs) else viewModel.weekDailyList(anchorMs)
+                list.map { (d, v) -> PlaytimeRow(formatDayLabel(d), v.toLong(), viewModel.dayAppTop(d), -1) }
+            }
+            StatsPeriod.MONTHLY -> {
+                val list = if (useCount) viewModel.monthDailyCountList(anchorMs) else viewModel.monthDailyList(anchorMs)
+                list.filter { (d, v) -> v.toLong() > 0L && d <= now }
+                    .map { (d, v) -> PlaytimeRow(formatDayLabel(d), v.toLong(), viewModel.dayAppTop(d), -1) }
+            }
+            StatsPeriod.YEARLY -> {
+                val list = if (useCount) viewModel.yearMonthlyCountList(anchorMs) else viewModel.yearMonthlyList(anchorMs)
+                list.filter { (d, v) -> v.toLong() > 0L && d <= now }
+                    .map { (d, v) -> PlaytimeRow(formatMonthLabel(d), v.toLong(), viewModel.monthAppTop(d), -1) }
+            }
+        }
+    }
+
+    val insights = remember(activePeriod, anchorMs, metricMode, playtimeRows, hourlyModeActive, useCount, hourlyMs, hourlyCnt, chartValues, prevValues) {
+        buildList<StatInsight> {
+            if (hourlyModeActive) {
+                val arr = if (useCount) hourlyCnt.map { it.toLong() }.toLongArray() else hourlyMs
+                val hi = arr.withIndex().maxByOrNull { it.value }?.index ?: -1
+                if (hi >= 0 && arr[hi] > 0L) add(StatInsight("峰值时段", "%02d:00".format(hi)))
+            } else {
+                val top = playtimeRows.maxByOrNull { it.value }
+                if (top != null) add(
+                    StatInsight("最活跃", top.label,
+                        if (useCount) "${top.value} 次" else formatHoursMs(top.value))
+                )
+                if (playtimeRows.isNotEmpty()) add(StatInsight("活跃天数", "${playtimeRows.size}", "天"))
+            }
+            // 环比上期：对比本期总量与上一周期（或昨日）总量，给出涨跌百分比。
+            val cur = chartValues.sum()
+            val prev = prevValues.sum()
+            if (cur > 0L && prev > 0L) {
+                val pct = (cur - prev) * 100f / prev
+                val sign = if (pct >= 0f) "+" else ""
+                add(
+                    StatInsight(
+                        "环比上期", "$sign${"%.1f".format(pct)}%",
+                        if (pct >= 0f) "较上期增长" else "较上期下降"
+                    )
+                )
+            } else if (cur > 0L && prev == 0L) {
+                add(StatInsight("环比上期", "新数据", "上期无记录"))
+            }
+        }
+    }
+
+    // 超长列表截断：> 7 个有效项时折叠并给出"展开全部"按钮。
+    // 日"今天"：当前时段 + 时长/次数前 3 时段；过往：首段 + 其后 3 段。
+    var expanded by remember(activePeriod, anchorMs, metricMode) { mutableStateOf(false) }
+    val showExpand = playtimeRows.size > 7
+    val displayRows = if (showExpand && !expanded) {
+        if (hourlyModeActive) {
+            val ch = currentHour()
+            val cur = playtimeRows.firstOrNull { it.hour == ch }
+            val top3 = playtimeRows.filter { it.hour != ch }.sortedByDescending { it.value }.take(3)
+            (listOfNotNull(cur) + top3).sortedBy { it.hour }
+        } else {
+            playtimeRows.take(4)
+        }
+    } else playtimeRows
+
+    // P1-2：把当前聚焦排行项包名回传给 HomeScreen，供手柄 A 键启动（消除功能死区）
+    LaunchedEffect(focusIndex, rankEntries) {
+        onFocus(rankEntries.getOrNull(focusIndex)?.packageName)
+    }
 
     val listState = listState
+    // 内容入场动画：总览卡 / 图表卡 / 列表在切换周期或视图时统一淡入 + 轻微上滑（reduceMotion 时立即到位）。
+    val cardEnter = if (reduceMotion) EnterTransition.None else
+        fadeIn(animationSpec = tween(280)) + slideInVertically(
+            animationSpec = tween(280), initialOffsetY = { it / 10 }
+        )
 
     // 任务 11（重构）：Stats 页横屏双栏模式（screenWidthDp >= 720 启用）
     // 需求调整（2026-07-13）：左 = 应用排行（左摇杆焦点）/ 右 = 总览总计（右摇杆滚动）。
     // 左摇杆仅在左栏(排行)移动焦点，右摇杆仅在右栏(总计)滚动，两摇杆互不越界。
     val isWideScreen = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= Dimens.WideScreenThresholdDp
-
-    // 左栏(排行)焦点跟随——焦点变化 / 周期变化时滚动排行到焦点行
-    LaunchedEffect(focusIndex, activePeriod, isWideScreen) {
-        if (reportEntries.isNotEmpty()) {
-            val idx = if (isWideScreen) focusIndex else 4 + focusIndex
-            runCatching { listState.scrollToItem(idx.coerceAtLeast(0)) }
-        }
-    }
 
 
     // 左栏（应用排行）固定宽度，右栏（总计+图表）自适应剩余空间
@@ -243,7 +488,7 @@ fun StatsScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.padding(top = Dimens.md, bottom = Dimens.xs)
                     )
-                    if (reportEntries.isEmpty()) {
+                    if (rankEntries.isEmpty()) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -252,6 +497,8 @@ fun StatsScreen(
                                               else "请在系统设置中开启『使用情况访问』")
                         }
                     } else {
+                        // 整体滑块（手柄全链路重构）：左栏排行滚动纯投影，手柄永不聚焦。
+                        Box(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
@@ -260,18 +507,22 @@ fun StatsScreen(
                             ),
                             verticalArrangement = Arrangement.spacedBy(Dimens.xs)
                         ) {
-                            items(reportEntries, key = { it.packageName }) { entry ->
+                            items(rankEntries, key = { it.packageName }, contentType = { "appRankRow" }) { entry ->
                                 AppRankRow(
-                                    rank = reportEntries.indexOf(entry) + 1,
+                                    rank = rankEntries.indexOf(entry) + 1,
                                     entry = entry,
-                                    totalMs = totalMs,
+                                    totalMs = if (useCount) totalCount.toLong() else totalMs,
+                                    useCount = useCount,
                                     label = rankEntryLabel(entry, apps),
                                     icon = apps.firstOrNull { it.packageName == entry.packageName }?.icon,
-                                    entranceIndex = reportEntries.indexOf(entry),
+                                    entranceIndex = rankEntries.indexOf(entry),
                                     reduceMotion = reduceMotion,
-                                    focused = gamepadConnected && reportEntries.indexOf(entry) == focusIndex
+                                    focused = gamepadConnected && focusZone == StatsFocusZone.RANK && rankEntries.indexOf(entry) == focusIndex,
+                                    onClick = { onEntryClick(entry.packageName) }
                                 )
                             }
+                        }
+                            ScrollProgressBar(listState, rankEntries.size, modifier = Modifier.align(Alignment.CenterEnd))
                         }
                     }
                 }
@@ -282,9 +533,10 @@ fun StatsScreen(
                 ) {}
                 // 右栏：总览总计（指标卡 + 图表，可滚动，右摇杆驱动滚动）
                 // 使用 weight(1f) 占满左栏固定宽度后剩余的全部空间
+                // 整体滑块（手柄全链路重构）：外层 Box 承载 weight，内层 Column 滚动，滑块叠右缘纯投影。
+                Box(modifier = Modifier.weight(1f).fillMaxSize()) {
                 Column(
                     modifier = Modifier
-                        .weight(1f)
                         .fillMaxSize()
                         .verticalScroll(leftScrollState),
                     verticalArrangement = Arrangement.spacedBy(Dimens.md)
@@ -296,7 +548,11 @@ fun StatsScreen(
                         horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
                     ) {
                         GamepadVisible { KeyBadge(text = "LB") }
-                        Box(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier.weight(1f).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.PERIOD
+                            )
+                        ) {
                             ReverieSegmentedRow(
                                 items = selectableStatsPeriods,
                                 selected = activePeriod,
@@ -312,8 +568,38 @@ fun StatsScreen(
                             period = activePeriod,
                             anchorMs = anchorMs,
                             onClick = { onDatePickerOpenChange(true) },
-                            modifier = Modifier.wrapContentWidth(unbounded = true)
+                            modifier = Modifier.wrapContentWidth(unbounded = true).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.DATE
+                            )
                             // 周视图下点击不触发选择器（DateIndicatorButton 内部已守卫）
+                        )
+                    }
+                    // 视图切换（图标 toggle：图表 / 列表，常驻）+ 指标切换（使用时长 / 启动次数，仅日"今天"）
+                    // 二者同区：视图滑块选展示样式，指标滑块选数据维度，均同时驱动图表与列表。
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
+                    ) {
+                        ReverieSegmentedRow(
+                            items = listOf(StatViewMode.Chart, StatViewMode.List),
+                            selected = viewMode,
+                            onSelect = { viewMode = it },
+                            icon = { if (it == StatViewMode.Chart) Icons.Filled.BarChart else Icons.Filled.List },
+                            showLabel = false,
+                            modifier = Modifier.weight(1f).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.VIEW
+                            )
+                        )
+                        ReverieSegmentedRow(
+                            items = listOf(StatMetricMode.Duration, StatMetricMode.Count),
+                            selected = metricMode,
+                            onSelect = { metricMode = it },
+                            label = { if (it == StatMetricMode.Duration) "使用时长" else "启动次数" },
+                            showLabel = true,
+                            modifier = Modifier.weight(1.3f).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.METRIC
+                            )
                         )
                     }
                     // 标题
@@ -332,7 +618,13 @@ fun StatsScreen(
                             Text(
                                 text = "未授权使用情况访问",
                                 color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val ctx = LocalContext.current
+                            ReverieFilledButton(
+                                onClick = { ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
+                                text = "去开启"
                             )
                         }
                     }
@@ -343,16 +635,17 @@ fun StatsScreen(
                             .height(IntrinsicSize.Max),
                         horizontalArrangement = Arrangement.spacedBy(Dimens.md)
                     ) {
-                        MetricCard(
-                            title = "总计",
-                            value = totalMs,
-                            format = { formatHours(it) },
-                            unit = "小时",
-                            trend = trendArrow(totalMs, activePeriod, weeklyReport.sumOf { it.ms }, monthlyReport.sumOf { it.ms }, yearlyReport.sumOf { it.ms }),
-                            accent = MaterialTheme.colorScheme.primary,
-                            icon = Icons.Filled.Timer,
-                            modifier = Modifier.weight(1f).fillMaxHeight()
-                        )
+                                MetricCard(
+                                    title = "总计",
+                                    subtitle = avgSubtitle,
+                                    value = if (useCount) totalCount.toLong() else totalMs,
+                                    format = { if (useCount) "$it" else formatHours(it) },
+                                    unit = if (useCount) "次" else "小时",
+                                    trend = if (useCount) null else trendArrow(totalMs, activePeriod, weeklyReport.sumOf { it.ms }, monthlyReport.sumOf { it.ms }, yearlyReport.sumOf { it.ms }),
+                                    accent = if (useCount) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
+                                    icon = if (useCount) Icons.Filled.PlayArrow else Icons.Filled.Timer,
+                                    modifier = Modifier.weight(1f).fillMaxHeight()
+                                )
                         MetricCard(
                             title = "应用量",
                             value = appCount.toLong(),
@@ -371,17 +664,37 @@ fun StatsScreen(
                             modifier = Modifier.weight(1f).fillMaxHeight()
                         )
                     }
-                    // 图表
-                    ChartCard(
-                        title = when (activePeriod) {
-                            StatsPeriod.DAILY -> "今日各小时使用"
-                            StatsPeriod.WEEKLY -> "近 7 天每日使用"
-                            StatsPeriod.MONTHLY -> "近 30 天每日使用"
-                            StatsPeriod.YEARLY -> "近 12 个月使用"
-                        },
-                        values = if (activePeriod == StatsPeriod.DAILY) hourly else daySeries,
-                        period = activePeriod
-                    )
+                    InsightsCard(insights = insights)
+                    // 图表（标题/数值与列表共用 chartTitle/chartValues，随指标切换）
+                    if (viewMode == StatViewMode.Chart) {
+                        ChartCard(
+                            title = chartTitle,
+                            values = chartValues,
+                            period = activePeriod,
+                            metric = metricMode,
+                            prevValues = prevValues,
+                            showValueLabels = !hourlyModeActive && chartValues.size <= 12
+                        )
+                    }
+                    if (viewMode == StatViewMode.List) {
+                        DailyPlaytimeList(
+                            title = playtimeTitle,
+                            rows = displayRows,
+                            apps = apps,
+                            mode = metricMode,
+                            reduceMotion = reduceMotion,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (showExpand && !expanded) {
+                            ReverieTonalButton(
+                                onClick = { expanded = true },
+                                text = "展开全部 (${playtimeRows.size})",
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+                    ScrollProgressBar(leftScrollState, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
         } else {
@@ -402,7 +715,11 @@ fun StatsScreen(
                         horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
                     ) {
                         GamepadVisible { KeyBadge(text = "LB") }
-                        Box(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier.weight(1f).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.PERIOD
+                            )
+                        ) {
                             ReverieSegmentedRow(
                                 items = selectableStatsPeriods,
                                 selected = activePeriod,
@@ -417,14 +734,18 @@ fun StatsScreen(
                             period = activePeriod,
                             anchorMs = anchorMs,
                             onClick = { onDatePickerOpenChange(true) },
-                            modifier = Modifier.wrapContentWidth(unbounded = true)
+                            modifier = Modifier.wrapContentWidth(unbounded = true).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.DATE
+                            )
                         )
                     }
                 }
                 // 3 张关键指标卡：竖屏（非宽屏）改 2 列网格（总计/应用量一行，最长使用占满），避免窄屏挤压变形。
                 // 与横屏一致：行用 IntrinsicSize.Max + 各卡 fillMaxHeight 保证总计/应用量/最长等高对齐。
-                item {
-                    val isNarrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < Dimens.NarrowScreenThresholdDp
+                item(key = "metrics") {
+                    AnimatedVisibility(visible = true, enter = cardEnter) {
+                        Column(verticalArrangement = Arrangement.spacedBy(Dimens.md)) {
+                        val isNarrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < Dimens.NarrowScreenThresholdDp
                     if (isNarrow) {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -437,7 +758,8 @@ fun StatsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(Dimens.md)
                             ) {
                                 MetricCard(
-                                    title = "总计", value = totalMs,
+                                    title = "总计",
+                            subtitle = avgSubtitle, value = totalMs,
                                     format = { formatHours(it) }, unit = "小时",
                                     trend = trendArrow(totalMs, activePeriod, weeklyReport.sumOf { it.ms }, monthlyReport.sumOf { it.ms }, yearlyReport.sumOf { it.ms }),
                                     accent = MaterialTheme.colorScheme.primary, icon = Icons.Filled.Timer,
@@ -464,7 +786,8 @@ fun StatsScreen(
                             horizontalArrangement = Arrangement.spacedBy(Dimens.md)
                         ) {
                             MetricCard(
-                                title = "总计", value = totalMs,
+                                title = "总计",
+                            subtitle = avgSubtitle, value = totalMs,
                                 format = { formatHours(it) }, unit = "小时",
                                 trend = trendArrow(totalMs, activePeriod, weeklyReport.sumOf { it.ms }, monthlyReport.sumOf { it.ms }, yearlyReport.sumOf { it.ms }),
                                 accent = MaterialTheme.colorScheme.primary, icon = Icons.Filled.Timer,
@@ -483,18 +806,74 @@ fun StatsScreen(
                             )
                         }
                     }
+                InsightsCard(insights = insights)
                 }
+                }
+                }
+                // 视图切换（图标 toggle：图表 / 列表，常驻）+ 指标切换（使用时长 / 启动次数，仅日"今天"）
                 item {
-                    ChartCard(
-                        title = when (activePeriod) {
-                            StatsPeriod.DAILY -> "今日各小时使用"
-                            StatsPeriod.WEEKLY -> "近 7 天每日使用"
-                            StatsPeriod.MONTHLY -> "近 30 天每日使用"
-                            StatsPeriod.YEARLY -> "近 12 个月使用"
-                        },
-                        values = if (activePeriod == StatsPeriod.DAILY) hourly else daySeries,
-                        period = activePeriod
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
+                    ) {
+                        ReverieSegmentedRow(
+                            items = listOf(StatViewMode.Chart, StatViewMode.List),
+                            selected = viewMode,
+                            onSelect = { viewMode = it },
+                            icon = { if (it == StatViewMode.Chart) Icons.Filled.BarChart else Icons.Filled.List },
+                            showLabel = false,
+                            modifier = Modifier.weight(1f).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.VIEW
+                            )
+                        )
+                        ReverieSegmentedRow(
+                            items = listOf(StatMetricMode.Duration, StatMetricMode.Count),
+                            selected = metricMode,
+                            onSelect = { metricMode = it },
+                            label = { if (it == StatMetricMode.Duration) "使用时长" else "启动次数" },
+                            showLabel = true,
+                            modifier = Modifier.weight(1.3f).focusBorder(
+                                enabled = focusZone == StatsFocusZone.OVERVIEW && overviewFocusIndex == StatsOverviewSlot.METRIC
+                            )
+                        )
+                    }
+                }
+                if (viewMode == StatViewMode.Chart) {
+                    item(key = "chart_$viewMode") {
+                        AnimatedVisibility(visible = true, enter = cardEnter) {
+                            ChartCard(
+                                title = chartTitle,
+                                values = chartValues,
+                                period = activePeriod,
+                                metric = metricMode,
+                                prevValues = prevValues,
+                                showValueLabels = !hourlyModeActive && chartValues.size <= 12
+                            )
+                        }
+                    }
+                }
+                if (viewMode == StatViewMode.List) {
+                    item(key = "list_$viewMode") {
+                        AnimatedVisibility(visible = true, enter = cardEnter) {
+                            DailyPlaytimeList(
+                                title = playtimeTitle,
+                                rows = displayRows,
+                                apps = apps,
+                                mode = metricMode,
+                                reduceMotion = reduceMotion
+                            )
+                        }
+                    }
+                    if (showExpand && !expanded) {
+                        item {
+                            ReverieTonalButton(
+                                onClick = { expanded = true },
+                                text = "展开全部 (${playtimeRows.size})",
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
                 item {
                     Text(
@@ -504,21 +883,22 @@ fun StatsScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                 }
-                if (reportEntries.isEmpty()) {
+                if (rankEntries.isEmpty()) {
                     item {
                         EmptyHint(text = if (usageGranted) "暂无${activePeriod.label}报数据" else "请在系统设置中开启『使用情况访问』")
                     }
                 } else {
-                    items(reportEntries, key = { it.packageName }) { entry ->
+                    items(rankEntries, key = { it.packageName }, contentType = { "appRankRow" }) { entry ->
                         AppRankRow(
-                            rank = reportEntries.indexOf(entry) + 1,
+                            rank = rankEntries.indexOf(entry) + 1,
                             entry = entry,
-                            totalMs = totalMs,
+                            totalMs = if (useCount) totalCount.toLong() else totalMs,
                             label = rankEntryLabel(entry, apps),
                             icon = apps.firstOrNull { it.packageName == entry.packageName }?.icon,
-                            entranceIndex = reportEntries.indexOf(entry),
+                            entranceIndex = rankEntries.indexOf(entry),
                             reduceMotion = reduceMotion,
-                            focused = gamepadConnected && reportEntries.indexOf(entry) == focusIndex
+                            useCount = useCount,
+                            focused = gamepadConnected && focusZone == StatsFocusZone.RANK && rankEntries.indexOf(entry) == focusIndex
                         )
                     }
                 }
@@ -529,15 +909,15 @@ fun StatsScreen(
         // 规则3：LB/RB 切周期已在周期滑块左右两侧给出角标，此处不复现。
         // 规则4：禁止任何上下滚动/方向键提示（原 "↑浏览/↓浏览" 已删除）。
         // 跨栏提示（原骑缝浮块已移除）统一置于此处；窄屏无跨栏，仅宽屏手柄连接时显示。
-        // 仅保留无按钮旁落点的 A 确认(打开日期选择器后) / B 返回。
+        // 仅保留无按钮旁落点的 VIEW「日期」独立快捷提示。
+        // 规则：A 确认 / B 返回为默认键不进底部提示栏（退出见标题栏）；LB/RB/LT/RT 不在此展示。
         // R9 修复（2026-07-14）：移除 LB/RB 周期提示（已在周期滑块旁浮块，避免重复）。
         GamepadBottomHintBar(
             modifier = Modifier.fillMaxWidth()
         ) {
             // 跨栏逻辑已整体移除：不再显示 LS/RS「跨栏」提示。
-            // 周视图无日期选择器，故「View 日期」提示仅在非周视图显示。
-            if (activePeriod != StatsPeriod.WEEKLY) Hint(KeyToken.VIEW, "日期")
-            Hint(KeyToken.B, "返回")
+            // 所有周期均有日期选择器（周/月/年走自绘 ReveriePeriodPickerDialog，日走原生 DatePicker）。
+            Hint(KeyToken.VIEW, "日期")
         }
     }
 }
@@ -561,6 +941,8 @@ private fun MetricCard(
     trend: Trend?,
     accent: Color,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    /** 副标题（如「日均 X」），位于标题下方、数值上方。 */
+    subtitle: String? = null,
     modifier: Modifier = Modifier
 ) {
     SurfaceCard(
@@ -579,6 +961,13 @@ private fun MetricCard(
             Text(
                 title,
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (subtitle != null) {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -712,9 +1101,18 @@ private fun trendArrow(totalMs: Long, period: StatsPeriod, weeklyTotal: Long, mo
 private fun ChartCard(
     title: String,
     values: LongArray,
-    period: StatsPeriod
+    period: StatsPeriod,
+    metric: StatMetricMode = StatMetricMode.Duration,
+    prevValues: LongArray? = null,
+    showValueLabels: Boolean = false
 ) {
-    val maxV = (values.maxOrNull() ?: 0L).coerceAtLeast(1L)
+    val rawMax = (values.maxOrNull() ?: 0L)
+    val prevMax = (prevValues?.maxOrNull() ?: 0L)
+    val maxV = (if (rawMax > prevMax) rawMax else prevMax).coerceAtLeast(1L)
+    // 维度配色：时长=主色，次数=次色；切换维度时图示颜色与文案同步变化（需求 #2）
+    val isCount = metric == StatMetricMode.Count
+    val barAccent = if (isCount) MaterialTheme.colorScheme.secondary else ChartAccent
+    val barNormal = if (isCount) MaterialTheme.colorScheme.secondary else ChartNormal
     // 高亮索引稳定化（R13）：避免 currentHour() 每次重组导致整张图重建 30 个动画 State
     val highlightIndex = remember(period) {
         if (period == StatsPeriod.DAILY) currentHour() else values.size - 1
@@ -730,6 +1128,14 @@ private fun ChartCard(
             label = "bar$i"
         )
     }
+    val prevRatios = prevValues?.mapIndexed { i, v ->
+        val ratio = (v.toFloat() / maxV).coerceIn(0f, 1f)
+        animateFloatAsState(
+            targetValue = ratio,
+            animationSpec = tween(320, delayMillis = MotionSpec.staggerDelay(i, maxMs = 120).toInt()),
+            label = "pbar$i"
+        )
+    }
     SurfaceCard(
         modifier = Modifier.fillMaxWidth(),
         level = SurfaceTokens.CardLevel.Subtle,
@@ -739,8 +1145,42 @@ private fun ChartCard(
             modifier = Modifier.padding(Dimens.md),
             verticalArrangement = Arrangement.spacedBy(Dimens.sm)
         ) {
-        Text(title, style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface)
+            // 图例：当前维度（时长 / 次数），切换维度时颜色与文案同步变化
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(barAccent, RoundedCornerShape(2.dp))
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = if (isCount) "次数" else "时长",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (prevValues != null) {
+                    Spacer(Modifier.width(Dimens.sm))
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(barAccent.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "上期",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
         // 竖屏（窄屏）纵向空间充裕，图表加高到 220dp 更易读；横屏/宽屏保持 180dp。
         val cfg = LocalConfiguration.current
         val chartHeight = if (cfg.screenWidthDp < cfg.screenHeightDp) 220.dp else 180.dp
@@ -748,11 +1188,17 @@ private fun ChartCard(
             val w = maxWidth
             val h = maxHeight
             val n = values.size.coerceAtLeast(1)
-            val barWidth = w.value / n * 0.6f
-            val gap = w.value / n * 0.4f
+            // 标签用的 dp 槽宽（Canvas 外的 Compose 布局用 dp，与柱心对齐）。
+            val slotDp = w.value / n
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val accent = ChartAccent
-                val normal = ChartNormal
+                // 关键修复：柱宽必须按 Canvas 像素尺寸 size.width 计算。原实现用 dp(w.value)
+                // 当像素传入，xxhdpi 下画布宽约 1080px 而 w.value≈360，柱宽被 density(~3x)
+                // 缩小 → 周视图 7 天等窄周期场景柱体过细、与 X 轴天数不匹配。
+                val slot = size.width / n
+                val barWidth = slot * 0.6f
+                val gap = slot * 0.4f
+                val accent = barAccent
+                val normal = barNormal
                 // 水平虚线（参考 Tai：30/60/100% 虚线）
                 val dashPath = Path()
                 listOf(0.33f, 0.66f, 1.0f).forEach { ratio ->
@@ -761,9 +1207,24 @@ private fun ChartCard(
                 }
                 drawPath(
                     path = dashPath,
-                    color = ChartAccent.copy(alpha = 0.18f),
+                    color = barAccent.copy(alpha = 0.18f),
                     style = Stroke(width = 1.2f)
                 )
+                if (prevRatios != null && prevValues != null) {
+                    prevValues.forEachIndexed { i, _ ->
+                        if (i < prevRatios.size) {
+                            val ratio = prevRatios[i].value
+                            val barH = size.height * ratio
+                            val x = i * (barWidth + gap) + gap / 2f
+                            val y = size.height - barH
+                            drawRect(
+                                color = barAccent.copy(alpha = 0.16f),
+                                topLeft = Offset(x, y),
+                                size = Size(barWidth * 0.7f, barH)
+                            )
+                        }
+                    }
+                }
                 values.forEachIndexed { i, v ->
                     val ratio = animatedRatios[i].value
                     val barH = size.height * ratio
@@ -777,11 +1238,36 @@ private fun ChartCard(
                     )
                 }
             }
+            // 数值标签：每根柱顶部显示具体数值（showValueLabels 控制，≤12 柱时启用，避免拥挤）
+            if (showValueLabels) {
+                values.forEachIndexed { i, v ->
+                    if (v <= 0L) return@forEachIndexed
+                    val ratio = animatedRatios[i].value.coerceIn(0f, 1f)
+                    val centerX = ((i + 0.5f) * slotDp).dp
+                    val topY = (h.value * (1f - ratio)).dp - 13.dp
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset(x = centerX - 11.dp, y = topY.coerceAtLeast(0.dp))
+                    ) {
+                        Text(
+                            text = if (isCount) "$v" else run {
+                                val minutes = (v / 60000).toInt()
+                                if (minutes >= 60) "%.1fh".format(minutes / 60f) else "${minutes}m"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
             // 数值标签（最大值线）
             Text(
-                text = "${(maxV / 60_000)}分钟",
+                text = if (isCount) "$maxV" else formatHoursMs(maxV),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFFEC4899),
+                color = barAccent,
                 modifier = Modifier.align(Alignment.TopEnd)
             )
         }
@@ -794,13 +1280,38 @@ private fun ChartCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 ) else Spacer(Modifier.width(1.dp))
-            } else {
-                Text("0", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${n / 2}", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${n - 1}", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (n == 7) {
+                listOf("一", "二", "三", "四", "五", "六", "日").forEach { wd ->
+                    Text(wd, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else when (period) {
+                StatsPeriod.YEARLY -> {
+                    // 年视图：12 个月，刻度用「月」语义（1/6/12 月），避免裸索引「0 6 11」让用户误以为图表损坏
+                    Text("1月", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("6月", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("12月", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                StatsPeriod.MONTHLY -> {
+                    // 月视图：n=当月天数（28–31），刻度用「日」语义（1/中/末日）
+                    Text("1", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${(n + 1) / 2}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("$n", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                else -> {
+                    Text("0", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${n / 2}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${n - 1}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
@@ -822,9 +1333,14 @@ private fun AppRankRow(
     /** 减少动态效果（无障碍）：入场动画立即到位。 */
     reduceMotion: Boolean = false,
     /** 任务 16：左摇杆焦点态（高亮 + 边框）。 */
-    focused: Boolean = false
+    focused: Boolean = false,
+    /** 触控点击：启动对应应用。 */
+    onClick: () -> Unit = {},
+    /** 排行是否按启动次数维度展示（与图表/列表一致，需求 #8）。 */
+    useCount: Boolean = false
 ) {
-    val percent = if (totalMs > 0) entry.ms.toFloat() / totalMs else 0f
+    val valueMs = if (useCount) entry.count.toLong() else entry.ms
+    val percent = if (totalMs > 0) valueMs.toFloat() / totalMs else 0f
     val animP by animateFloatAsState(
         targetValue = percent,
         animationSpec = tween(600),
@@ -860,16 +1376,26 @@ private fun AppRankRow(
                 else SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle)
             )
             .focusBorder(focusedVis, MaterialTheme.colorScheme.primary, RoundedCornerShape(Dimens.md))
+            .clickable { onClick() }
             .padding(horizontal = Dimens.md, vertical = Dimens.sm),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "$rank",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.width(28.dp)
-        )
+        val medal = if (rank <= 3) listOf(Color(0xFFE6B450), Color(0xFFC2C9D1), Color(0xFFCD9154))[rank - 1] else null
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(medal ?: Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "$rank",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (medal != null) Color.Black else MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(Modifier.width(Dimens.xxs))
         if (icon != null) {
             androidx.compose.foundation.Image(
                 bitmap = icon,
@@ -878,6 +1404,21 @@ private fun AppRankRow(
                     .size(32.dp)
                     .clip(RoundedCornerShape(8.dp))
             )
+        } else if (entry.packageName == cn.mocabolka.run.viewmodel.HomeViewModel.SYSTEM_AGGREGATE_PKG) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SurfaceTokens.focusBg()),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Android,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         } else {
             Box(
                 modifier = Modifier
@@ -899,11 +1440,19 @@ private fun AppRankRow(
             )
         }
         Spacer(Modifier.width(Dimens.sm))
-        Text(
-            text = formatHoursMs(entry.ms),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = if (useCount) "${entry.count}" else formatHoursMs(entry.ms),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = if (useCount) "次" else "%.0f%%".format(percent * 100),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -949,6 +1498,18 @@ internal fun dateKeyOf(ms: Long): String {
     )
 }
 
+/** 按周期平移锚点（delta=-1 即上一周期），用于图表环比对比。 */
+private fun shiftAnchorByPeriod(ms: Long, period: StatsPeriod, delta: Int): Long {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    when (period) {
+        StatsPeriod.DAILY -> cal.add(java.util.Calendar.DAY_OF_MONTH, delta)
+        StatsPeriod.WEEKLY -> cal.add(java.util.Calendar.DAY_OF_MONTH, delta * 7)
+        StatsPeriod.MONTHLY -> cal.add(java.util.Calendar.MONTH, delta)
+        StatsPeriod.YEARLY -> cal.add(java.util.Calendar.YEAR, delta)
+    }
+    return cal.timeInMillis
+}
+
 /** 把毫秒格式化为"X.YY 小时"（Tai 风格保留两位小数）。 */
 private fun formatHours(ms: Long): String {
     val hours = ms / 3_600_000.0
@@ -963,6 +1524,181 @@ private fun formatHoursMs(ms: Long): String {
         h > 0 -> "${h}小时${m}分"
         m > 0 -> "${m}分${sec}秒"
         else -> "${sec}秒"
+    }
+}
+
+/** 指标模式：使用时长 / 启动次数（图表与列表共用）。 */
+private enum class StatMetricMode { Duration, Count }
+
+/** 视图模式：图表 / 列表（图标 toggle 切换展示样式，与指标滑块同区）。 */
+private enum class StatViewMode { Chart, List }
+
+/** 每日/每月/每小时列表行：标签 + 数值（时长ms 或 次数）+ 该时段 Top3 应用包名 + 小时（日视图用）。 */
+private data class PlaytimeRow(
+    val label: String,
+    val value: Long,
+    val topPkgs: List<String> = emptyList(),
+    val hour: Int = -1
+)
+
+/** 洞察卡：标签 + 主值 + 副值（如单位）。 */
+private data class StatInsight(val label: String, val primary: String, val secondary: String = "")
+
+@Composable
+private fun InsightsCard(insights: List<StatInsight>) {
+    if (insights.isEmpty()) return
+    SurfaceCard(
+        modifier = Modifier.fillMaxWidth(),
+        level = SurfaceTokens.CardLevel.Subtle,
+        shape = Dimens.lg
+    ) {
+        Column(
+            modifier = Modifier.padding(Dimens.md),
+            verticalArrangement = Arrangement.spacedBy(Dimens.sm)
+        ) {
+            Text("洞察", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.sm)
+            ) {
+                insights.forEach { ins ->
+                    Column(
+                        modifier = Modifier.weight(1f)
+                            .clip(RoundedCornerShape(Dimens.md))
+                            .background(SurfaceTokens.focusBg())
+                            .padding(Dimens.sm)
+                    ) {
+                        Text(ins.label, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(ins.primary, style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                        if (ins.secondary.isNotEmpty()) Text(
+                            ins.secondary, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 日期标签：M月d日 */
+private fun formatDayLabel(ms: Long): String {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    return "${cal.get(java.util.Calendar.MONTH) + 1}月${cal.get(java.util.Calendar.DAY_OF_MONTH)}日"
+}
+
+/** 月份标签：yyyy年M月 */
+private fun formatMonthLabel(ms: Long): String {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    return "${cal.get(java.util.Calendar.YEAR)}年${cal.get(java.util.Calendar.MONTH) + 1}月"
+}
+
+/**
+ * 统计页「游玩时长列表」：按时间倒序（最新在最上面），每行显示
+ * 日期/小时/月份 + 时长条形 + 时长文字。用于日（逐小时）/ 周 / 月（逐日）/ 年（逐月）视图。
+ */
+@Composable
+private fun DailyPlaytimeList(
+    title: String,
+    rows: List<PlaytimeRow>,
+    apps: List<AppModel>,
+    mode: StatMetricMode,
+    reduceMotion: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(bottom = Dimens.xs)
+        )
+        if (rows.isEmpty()) {
+            EmptyHint(text = "暂无游玩记录")
+        } else {
+            val maxValue = rows.maxOfOrNull { it.value }?.coerceAtLeast(1L) ?: 1L
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.xxs)) {
+                rows.forEachIndexed { idx, row ->
+                    val ratio = (row.value.toFloat() / maxValue).coerceIn(0f, 1f)
+                    AnimatedVisibility(
+                        visible = true,
+                        enter = if (reduceMotion) EnterTransition.None else
+                            fadeIn(animationSpec = tween(200, delayMillis = MotionSpec.staggerDelay(idx, maxMs = 60).toInt()))
+                                + slideInHorizontally(animationSpec = tween(200, delayMillis = MotionSpec.staggerDelay(idx, maxMs = 60).toInt()), initialOffsetX = { -12 }),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (row.value == maxValue && row.value > 0L) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                else SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle),
+                                RoundedCornerShape(Dimens.sm)
+                            )
+                            .padding(horizontal = Dimens.sm, vertical = Dimens.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
+                    ) {
+                        Text(
+                            text = row.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.widthIn(min = 64.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(6.dp)
+                                .background(
+                                    SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Faint),
+                                    RoundedCornerShape(3.dp)
+                                )
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(ratio)
+                                    .height(6.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.primary,
+                                        RoundedCornerShape(3.dp)
+                                    )
+                            )
+                        }
+                        // 该时段 Top3 应用图标（小图，与进度条同行不换行）
+                        row.topPkgs.take(3).forEach { pkg ->
+                            val icon = apps.firstOrNull { it.packageName == pkg }?.icon
+                            if (icon != null) {
+                                Image(
+                                    bitmap = icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            modifier = Modifier.widthIn(min = 56.dp).wrapContentWidth(Alignment.End)
+                        ) {
+                            Text(
+                                text = if (row.value <= 0L) "—" else (if (mode == StatMetricMode.Duration) formatHoursMs(row.value) else "${row.value} 次"),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
+                            )
+                        if (row.value > 0L) Text(
+                            text = "%.0f%%".format((row.value.toFloat() / maxValue) * 100),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        }
+                    }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1033,8 +1769,7 @@ private fun DateIndicatorButton(
     val label = formatAnchorLabel(period, anchorMs)
     // 重构（2026-07-14）：取消「按钮属性」，改为纯文本 + 图标行（不再用 ReverieTonalButton 的
     // tonal 背景/按压态），仅保留 clickable + 焦点边框，外观更轻、更贴合统计页极简调性。
-    // 周视图（WEEKLY）无独立日期选择器：点击不触发选择器，仅展示周区间标签（文字呈 muted 态）。
-    val isWeekly = period == StatsPeriod.WEEKLY
+    // 周/月/年均有独立周期选择器（自绘 ReveriePeriodPickerDialog），点击触发选择器。
     Box(modifier = modifier.wrapContentWidth(unbounded = true)) {
         wrapFocusBorder(focused = focused) {
             Row(
@@ -1043,7 +1778,6 @@ private fun DateIndicatorButton(
                 modifier = Modifier
                     .clip(MaterialTheme.shapes.medium)
                     .clickable(
-                        enabled = !isWeekly,
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },
                         onClick = onClick
@@ -1053,15 +1787,13 @@ private fun DateIndicatorButton(
             ) {
                 Icon(
                     Icons.Filled.CalendarMonth, null,
-                    tint = if (isWeekly) SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong)
-                           else MaterialTheme.colorScheme.primary,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(Dimens.IconSm)
                 )
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (isWeekly) SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong)
-                             else MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         }
@@ -1108,6 +1840,177 @@ private fun shiftDay(ms: Long, days: Int): Long {
 }
 
 /**
+ * 自定义周期选择器（周/月/年）：替代原生 DatePicker。
+ *
+ * 原生 DatePicker 是"日"粒度，且手柄事件不走原生 KeyEvent 需繁琐桥接；
+ * 而统计页周/月/年视图要的是"选一个周期"而非"选一天"，原生组件粒度错配
+ * （truncToPeriod 把所选日一律落到月/年首，导致同月内移动无效，且图表/列表走尾部窗口显示错乱）。
+ * 本自绘选择器以"周期单位"步进（周±7天/月±1月/年±1年），LB/RB 大跳
+ * （周±4周/月±1年/年±5年），A 确认、B 取消、X 回到本期，
+ * 直接接入项目手柄桥接（StatsDatePickerBridge）与焦点/视觉规范，比原生更贴合且可靠。
+ */
+@Composable
+fun ReveriePeriodPickerDialog(
+    period: StatsPeriod,
+    initialAnchorMs: Long,
+    bridge: StatsDatePickerBridge,
+    onConfirm: (Long) -> Unit,
+    onDismiss: () -> Unit,
+    /** 挖孔屏适配开关：透传 DialogScaffold 底部提示栏安全边距。 */
+    cutoutAdapt: Boolean = false
+) {
+    val nowPeriodStart = remember(period) { alignToPeriodStart(System.currentTimeMillis(), period) }
+    var cursorMs by remember(initialAnchorMs) { mutableStateOf(alignToPeriodStart(initialAnchorMs, period)) }
+
+    fun step(amount: Int) {
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = cursorMs }
+        when (period) {
+            StatsPeriod.WEEKLY -> cal.add(java.util.Calendar.DAY_OF_MONTH, amount * 7)
+            StatsPeriod.MONTHLY -> cal.add(java.util.Calendar.MONTH, amount)
+            StatsPeriod.YEARLY -> cal.add(java.util.Calendar.YEAR, amount)
+            else -> cal.add(java.util.Calendar.DAY_OF_MONTH, amount)
+        }
+        var next = cal.timeInMillis
+        if (next > nowPeriodStart) next = nowPeriodStart
+        cursorMs = next
+    }
+
+    // 手柄桥接：方向键单步、LB/RB 大跳、A 确认、B 取消、X 回到本期。
+    LaunchedEffect(bridge, period) {
+        bridge.onMove = { dir ->
+            val s = when (dir) {
+                Direction.UP, Direction.LEFT -> -1
+                else -> 1
+            }
+            step(s)
+        }
+        bridge.onPage = { dir -> step(dir * pageStep(period)) }
+        bridge.onConfirm = { onConfirm(cursorMs) }
+        bridge.onCancel = { onDismiss() }
+        bridge.jumpToAnchor = { cursorMs = nowPeriodStart }
+        bridge.onScroll = {}
+        bridge.scrollByPx = {}
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            bridge.onMove = {}; bridge.onPage = {}; bridge.onConfirm = {}
+            bridge.onCancel = {}; bridge.jumpToAnchor = {}; bridge.onScroll = {}
+            bridge.scrollByPx = {}
+        }
+    }
+
+    DialogScaffold(
+        onDismiss = onDismiss,
+        cutoutAdapt = cutoutAdapt,
+        bottomHintContent = {
+            Hint(KeyToken.A, "确认")
+            Hint(KeyToken.X, "回到本期")
+            Hint(KeyToken.B, "关闭")
+        }
+    ) {
+        Surface(
+            shape = RoundedCornerShape(Dimens.RadiusLg),
+            color = SurfaceTokens.cardSurfaceStrong(),
+            tonalElevation = 6.dp,
+            modifier = Modifier.widthIn(max = Dimens.DialogMaxWidth).fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(Dimens.md),
+                verticalArrangement = Arrangement.spacedBy(Dimens.sm),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = when (period) {
+                        StatsPeriod.WEEKLY -> "选择周"
+                        StatsPeriod.MONTHLY -> "选择月"
+                        else -> "选择年"
+                    },
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = periodLabel(cursorMs, period),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (period == StatsPeriod.WEEKLY) {
+                    Text(
+                        text = weekRangeLabel(cursorMs),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong)
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Dimens.xs),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    ReverieTonalButton(onClick = { step(-pageStep(period)) }, text = "«", modifier = Modifier.weight(1f))
+                    ReverieTonalButton(onClick = { step(-1) }, text = "‹", modifier = Modifier.weight(1f))
+                    ReverieTonalButton(onClick = { step(1) }, text = "›", modifier = Modifier.weight(1f))
+                    ReverieTonalButton(onClick = { step(pageStep(period)) }, text = "»", modifier = Modifier.weight(1f))
+                }
+                ReverieOutlinedButton(
+                    onClick = { cursorMs = nowPeriodStart },
+                    text = when (period) {
+                        StatsPeriod.WEEKLY -> "回到本周"
+                        StatsPeriod.MONTHLY -> "回到本月"
+                        else -> "回到本年"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Dimens.xs),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    ReverieTonalButton(onClick = onDismiss, text = "取消", modifier = Modifier.weight(1f))
+                    ReverieFilledButton(onClick = { onConfirm(cursorMs) }, text = "确认", modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+private fun pageStep(period: StatsPeriod): Int = when (period) {
+    StatsPeriod.WEEKLY -> 4
+    StatsPeriod.MONTHLY -> 12
+    StatsPeriod.YEARLY -> 5
+    else -> 1
+}
+
+private fun alignToPeriodStart(ms: Long, period: StatsPeriod): Long {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    return when (period) {
+        StatsPeriod.WEEKLY -> weekStartCalendar(ms).timeInMillis
+        StatsPeriod.MONTHLY -> { cal.set(java.util.Calendar.DAY_OF_MONTH, 1); zeroOfDay(cal) }
+        StatsPeriod.YEARLY -> { cal.set(java.util.Calendar.MONTH, 0); cal.set(java.util.Calendar.DAY_OF_MONTH, 1); zeroOfDay(cal) }
+        else -> zeroOfDay(cal)
+    }
+}
+
+private fun periodLabel(ms: Long, period: StatsPeriod): String {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    val y = cal.get(java.util.Calendar.YEAR)
+    return when (period) {
+        StatsPeriod.WEEKLY -> {
+            val week = cal.get(java.util.Calendar.WEEK_OF_YEAR)
+            "$y 年 第${week}周"
+        }
+        StatsPeriod.MONTHLY -> "$y 年 ${cal.get(java.util.Calendar.MONTH) + 1} 月"
+        else -> "$y 年"
+    }
+}
+
+private fun weekRangeLabel(ms: Long): String {
+    val s = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    val e = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    e.add(java.util.Calendar.DAY_OF_MONTH, 6)
+    val f = { c: java.util.Calendar -> "%02d/%02d".format(c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH)) }
+    return "${f(s)} – ${f(e)}"
+}
+
+/**
  * 原生 Material3 日期选择器封装（替代自绘 DateRangePickerDialog）。
  *
  * 设计：
@@ -1134,7 +2037,9 @@ internal fun NativeDatePickerDialog(
     initialAnchorMs: Long,
     bridge: StatsDatePickerBridge,
     onConfirm: (Long) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** 挖孔屏适配开关：透传 DialogScaffold 底部提示栏安全边距。 */
+    cutoutAdapt: Boolean = false
 ) {
     // 仅日/月/年三类走原生选择器；周不在此打开（入口已隐藏）。
     val todayMs = remember { zeroOfDay(java.util.Calendar.getInstance()) }
@@ -1218,6 +2123,7 @@ internal fun NativeDatePickerDialog(
 
     DialogScaffold(
         onDismiss = onDismiss,
+        cutoutAdapt = cutoutAdapt,
         bottomHintContent = {
             Hint(KeyToken.A, "确认")
             Hint(KeyToken.B, "关闭")
@@ -1227,8 +2133,52 @@ internal fun NativeDatePickerDialog(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
+            // 与项目其它 Dialog 统一配色：容器 cardSurfaceStrong / 选中·今天 primary /
+            // 普通文字 onSurface / 弱化·禁用 mutedOnSurface / 分隔线 restingBorderColorSoft，
+            // 彻底摆脱 Material3 默认色（默认 divider、文本框等与其它 Dialog 不一致）。
+            val pickerColors = DatePickerDefaults.colors(
+                containerColor = SurfaceTokens.cardSurfaceStrong(),
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                headlineContentColor = MaterialTheme.colorScheme.onSurface,
+                weekdayContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
+                subheadContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
+                yearContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
+                currentYearContentColor = MaterialTheme.colorScheme.primary,
+                selectedDayContainerColor = MaterialTheme.colorScheme.primary,
+                selectedDayContentColor = MaterialTheme.colorScheme.onPrimary,
+                todayDateBorderColor = MaterialTheme.colorScheme.primary,
+                dayInSelectionRangeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                dayContentColor = MaterialTheme.colorScheme.onSurface,
+                selectedYearContainerColor = MaterialTheme.colorScheme.primary,
+                selectedYearContentColor = MaterialTheme.colorScheme.onPrimary,
+                disabledDayContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Faint),
+                disabledSelectedDayContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Faint),
+                disabledSelectedDayContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                disabledYearContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Faint),
+            )
+
             val dialogMaxW = minOf(Dimens.DialogMaxWidth, maxWidth)
-            val dialogMaxH = maxHeight
+            // 留 6% 安全边距，避免缩放后紧贴屏幕边缘
+            val dialogMaxH = maxHeight * 0.94f
+            // 系统 DatePicker 的自然尺寸（Material3 固定 Dp 布局）明显大于本应用整体视觉比例，
+            // 故无论内容是否溢出，统一按 baseScale 等比缩小；若缩小后仍超出可用区域，
+            // 再按宽/高比例进一步缩小，保证 DatePicker + 锚点芯片 + 确认/取消 完整可见、不被裁切。
+            // 注：查询系统 DPI 无效——picker 与我们的 UI 共用同一 density，偏大来自组件固有 Dp 尺寸，非密度差异。
+            var contentSize by remember { mutableStateOf(IntSize.Zero) }
+            val density = LocalDensity.current
+            val baseScale = 0.9f
+            val scale = remember(contentSize, dialogMaxW, dialogMaxH) {
+                if (contentSize.width == 0 || contentSize.height == 0) baseScale
+                else {
+                    val w = with(density) { contentSize.width.toDp() }
+                    val h = with(density) { contentSize.height.toDp() }
+                    minOf(
+                        if (w > dialogMaxW) dialogMaxW / w else 1f,
+                        if (h > dialogMaxH) dialogMaxH / h else 1f,
+                        baseScale
+                    )
+                }
+            }
             Surface(
                     shape = RoundedCornerShape(Dimens.RadiusLg),
                     color = SurfaceTokens.cardSurfaceStrong(),
@@ -1236,7 +2186,7 @@ internal fun NativeDatePickerDialog(
                     modifier = Modifier
                         .widthIn(max = dialogMaxW)
                         .fillMaxWidth()
-                        .heightIn(max = dialogMaxH)
+                        .graphicsLayer { scaleX = scale; scaleY = scale }
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -1244,7 +2194,9 @@ internal fun NativeDatePickerDialog(
                         )
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = Dimens.md, vertical = Dimens.sm),
+                        modifier = Modifier
+                            .padding(horizontal = Dimens.md, vertical = Dimens.sm)
+                            .onSizeChanged { contentSize = it },
                         verticalArrangement = Arrangement.spacedBy(Dimens.sm)
                     ) {
                         if (!isRange) {
@@ -1252,21 +2204,9 @@ internal fun NativeDatePickerDialog(
                                 DatePicker(
                                     state = st,
                                     showModeToggle = true,
-                                    colors = DatePickerDefaults.colors(
-                                        containerColor = SurfaceTokens.cardSurfaceStrong(),
-                                        titleContentColor = MaterialTheme.colorScheme.onSurface,
-                                        headlineContentColor = MaterialTheme.colorScheme.onSurface,
-                                        weekdayContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
-                                        subheadContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
-                                        yearContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
-                                        currentYearContentColor = MaterialTheme.colorScheme.primary,
-                                        selectedDayContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedDayContentColor = MaterialTheme.colorScheme.onPrimary,
-                                        todayDateBorderColor = MaterialTheme.colorScheme.primary,
-                                        dayInSelectionRangeContainerColor = MaterialTheme.colorScheme.primaryContainer
-                                    ),
+                                    colors = pickerColors,
                                 title = {
-                                    Text("选择日期", style = MaterialTheme.typography.titleLarge,
+                                    Text("选择日期", style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.padding(start = Dimens.sm, top = Dimens.sm))
                                 }
@@ -1277,28 +2217,28 @@ internal fun NativeDatePickerDialog(
                                 DateRangePicker(
                                     state = st,
                                     showModeToggle = true,
-                                    colors = DatePickerDefaults.colors(
-                                        containerColor = SurfaceTokens.cardSurfaceStrong(),
-                                        titleContentColor = MaterialTheme.colorScheme.onSurface,
-                                        headlineContentColor = MaterialTheme.colorScheme.onSurface,
-                                        weekdayContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
-                                        subheadContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
-                                        yearContentColor = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Strong),
-                                        currentYearContentColor = MaterialTheme.colorScheme.primary,
-                                        selectedDayContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedDayContentColor = MaterialTheme.colorScheme.onPrimary,
-                                        todayDateBorderColor = MaterialTheme.colorScheme.primary,
-                                        dayInSelectionRangeContainerColor = MaterialTheme.colorScheme.primaryContainer
-                                    ),
-                                title = {
-                                    Text(
-                                        if (period == StatsPeriod.MONTHLY) "选择月份" else "选择年份",
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(start = Dimens.sm, top = Dimens.sm))
-                                }
+                                    colors = pickerColors,
+                                    title = {
+                                        Text(
+                                            if (period == StatsPeriod.MONTHLY) "选择月份" else "选择年份",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.padding(start = Dimens.sm, top = Dimens.sm))
+                                    }
                             )
                         }
+                    }
+
+                    // 快捷锚点：一键跳到今天 / 本周 / 本月 / 本年（写入选中日并同步锚点）。
+                    val nowMs = remember { System.currentTimeMillis() }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = Dimens.xs),
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
+                    ) {
+                        ReverieTonalButton(onClick = { val a = truncToPeriod(nowMs, StatsPeriod.DAILY); selectedMs = a; if (isRange) rangeState?.setSelection(a, a) else singleState?.selectedDateMillis = a }, text = "今天")
+                        ReverieTonalButton(onClick = { val a = truncToPeriod(nowMs, StatsPeriod.WEEKLY); selectedMs = a; if (isRange) rangeState?.setSelection(a, a) else singleState?.selectedDateMillis = a }, text = "本周")
+                        ReverieTonalButton(onClick = { val a = truncToPeriod(nowMs, StatsPeriod.MONTHLY); selectedMs = a; if (isRange) rangeState?.setSelection(a, a) else singleState?.selectedDateMillis = a }, text = "本月")
+                        ReverieTonalButton(onClick = { val a = truncToPeriod(nowMs, StatsPeriod.YEARLY); selectedMs = a; if (isRange) rangeState?.setSelection(a, a) else singleState?.selectedDateMillis = a }, text = "本年")
                     }
 
                     // 底部：确认 / 取消按钮（与 DropdownDialog / ConfirmDialog 统一 MD3 风格）。

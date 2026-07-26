@@ -1,5 +1,6 @@
 package cn.mocabolka.run.ui.components
 
+import android.content.res.Configuration
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -42,6 +43,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import cn.mocabolka.run.ui.theme.LocalShowFocusIndicators
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -52,12 +54,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import cn.mocabolka.run.launcher.AppModel
 import cn.mocabolka.run.launcher.relativeLastUsed
-import cn.mocabolka.run.ui.components.KeyBadge
-import cn.mocabolka.run.ui.components.KeyToken
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.FavoriteStar
 import cn.mocabolka.run.ui.theme.MotionSpec
-import cn.mocabolka.run.ui.theme.PulseSpec
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 import kotlinx.coroutines.delay
 
@@ -87,6 +86,8 @@ fun AppListItem(
     onLaunch: () -> Unit,
     onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 点击整行的回调（触控进入）。默认等同 [onFocus]（仅选中）；游戏类应用由调用方改为打开游戏页。 */
+    onOpen: (AppModel) -> Unit = { onFocus() },
     /** 仅在已连接手柄时显示收藏按钮的 X 角标。 */
     showGamepadHints: Boolean = false,
     /** 行高；默认 76dp。 */
@@ -132,7 +133,7 @@ fun AppListItem(
     )
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.99f else 1f,
+        targetValue = if (isPressed) 0.96f else 1f,
         animationSpec = MotionSpec.FocusSpring,
         label = "listItemScale"
     )
@@ -146,6 +147,11 @@ fun AppListItem(
 
     // 焦点框可见性：手柄未连接 / 纯触控模式下强制视为"未聚焦"，不绘制焦点框
     val focused = isFocused && LocalShowFocusIndicators.current
+
+    // 竖屏模式：列表项宽度有限，名称优先完整显示——隐藏"上次游玩"与"今日时长"两列
+    // （这两列各占 90/72dp，会把 weight(1f) 的名称列压到几乎不可见）；
+    // 横屏/宽屏空间充足，保留全部信息列。
+    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
 
     // 收藏星标弹跳（成为收藏时 pop）
     var favPulse by remember { mutableStateOf(false) }
@@ -188,8 +194,9 @@ fun AppListItem(
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
-                    // 触控模式：点击仅选中并显示右侧详情（不再直接启动），启动走详情面板启动按钮
-                    onClick = onFocus
+                    // 触控模式：点击默认选中并显示右侧详情（不再直接启动），启动走详情面板启动按钮；
+                    // 游戏类应用由调用方传入 onOpen 改为打开游戏专属页面。
+                    onClick = { onOpen(app) }
                 )
                 .padding(horizontal = Dimens.md, vertical = Dimens.xs),
             verticalAlignment = Alignment.CenterVertically,
@@ -264,9 +271,9 @@ fun AppListItem(
                 )
             }
 
-            // ─── 3. 上次游玩 / 今日时长（可选列）──────────
+            // ─── 3. 上次游玩 / 今日时长（可选列，竖屏隐藏以让位名称列）──────────
             val last = relativeLastUsed(app.lastUsedTime)
-            if (last != null) {
+            if (last != null && !isPortrait) {
                 Text(
                     text = last,
                     style = MaterialTheme.typography.labelSmall,
@@ -276,8 +283,8 @@ fun AppListItem(
                     modifier = Modifier.width(90.dp)
                 )
             }
-            // 今日使用时长（R11-3）：仅当天有记录时显示，避免空占列
-            if (todayUsage > 0L) {
+            // 今日使用时长（R11-3）：仅当天有记录时显示，竖屏下隐藏以让位名称列
+            if (todayUsage > 0L && !isPortrait) {
                 val usageText = formatDuration(todayUsage)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -314,14 +321,6 @@ fun AppListItem(
                         modifier = Modifier
                             .size(20.dp)
                             .graphicsLayer { scaleX = favScale; scaleY = favScale }
-                    )
-                }
-                if (showGamepadHints && focused) {
-                    KeyBadge(
-                        token = KeyToken.Y,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .offset(x = 4.dp, y = (-2).dp)
                     )
                 }
             }

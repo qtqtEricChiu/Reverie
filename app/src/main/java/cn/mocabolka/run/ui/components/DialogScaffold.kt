@@ -8,12 +8,14 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import cn.mocabolka.run.ui.theme.Dimens
+import cn.mocabolka.run.ui.theme.edgeSafePadding
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 
 /**
@@ -52,6 +54,8 @@ fun DialogScaffold(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     showBottomHint: Boolean = true,
+    /** 挖孔屏适配开关：透传宿主页面设置，使底部提示栏与页面其他内容保持一致的左右安全边距。 */
+    cutoutAdapt: Boolean = false,
     bottomHintContent: @Composable RowScope.() -> Unit = {
         Hint(KeyToken.A, "确认")
         Hint(KeyToken.B, "关闭")
@@ -87,6 +91,8 @@ fun DialogScaffold(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .edgeSafePadding(cutoutAdapt)
             ) {
                 bottomHintContent()
             }

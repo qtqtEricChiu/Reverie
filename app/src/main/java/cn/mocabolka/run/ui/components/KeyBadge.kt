@@ -15,12 +15,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,9 +27,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import cn.mocabolka.run.gamepad.GamepadDetector
 import cn.mocabolka.run.ui.theme.Dimens
+import cn.mocabolka.run.ui.theme.LocalShowFocusIndicators
 import cn.mocabolka.run.ui.theme.SurfaceTokens
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 
 /**
  * 全局唯一的手柄键位浮块。
@@ -236,14 +244,15 @@ fun HintBar(
 fun RowScope.Hint(
     token: KeyToken,
     text: String,
-    variant: KeyBadgeVariant = KeyBadgeVariant.Glass
+    variant: KeyBadgeVariant = KeyBadgeVariant.Glass,
+    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
 ) {
     KeyBadge(token = token, variant = variant)
     Spacer(Modifier.width(Dimens.HintBadgeGap))
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        color = textColor
     )
 }
 
@@ -252,14 +261,15 @@ fun RowScope.Hint(
 fun RowScope.Hint(
     text: String,
     action: String,
-    variant: KeyBadgeVariant = KeyBadgeVariant.Glass
+    variant: KeyBadgeVariant = KeyBadgeVariant.Glass,
+    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
 ) {
     KeyBadge(text = text, variant = variant)
     Spacer(Modifier.width(Dimens.HintBadgeGap))
     Text(
         text = action,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        color = textColor
     )
 }
 
@@ -277,6 +287,9 @@ fun RowScope.HintGap() {
  *          **不再叠加任何半透明色块**（surfaceVariant 底色已移除，避免视觉污染）。
  * - 规则3：已在按钮旁给出键位角标（A 启动 / X 收藏 / LB·RB 周期 / LT·RT 滑块）的，此处不复现。
  * - 规则4：禁止出现任何上下滚动 / 十字方向键 / 左右摇杆操作提示（如 "↑ 浏览" "↓ 浏览"）。
+ *   例外（2026-07-26 用户专项补充）：搜索页 INPUT 态底部栏允许显示 "←→ 移动光标"，
+ *   提示十字键（D-pad）左右移动文本光标（让位 IME）——该分工非显而易见，属功能发现型提示，
+ *   不属规则4旨在剔除的"列表浏览导航"类冗余提示，故作为唯一豁免保留。
  *
  * 标准化模板：
  * - 高度固定 [Dimens.HintBarHeight]，横屏模式下底部外边距强制为 0。
@@ -285,12 +298,21 @@ fun RowScope.HintGap() {
  * - 项内「键位 → 描述」间距统一为 [Dimens.HintItemGap]（4dp），行内整体 [Arrangement.spacedBy]
  *   由调用方在组内用 [RowScope.Hint] 连续排布，组间由 [HintGap] 拉开。
  *
- * 调用方应传入 `modifier = Modifier.fillMaxWidth()`，自身不再做水平 padding（对齐全屏基线
- * [Dimens.ContentHorizontal] 由页面根容器统一负责，避免双重内陷）。
+ * 调用方应传入 `modifier = Modifier.fillMaxWidth()`，**默认不再做水平 padding**（对齐全屏基线
+ * [Dimens.ContentHorizontal] 应由页面根容器统一负责，避免双重内陷——此前 BottomHintBar
+ * 内部硬编码 ContentHorizontal 导致 GamePage / StatsScreen / 美术子页等根容器已加
+ * ContentHorizontal/ScreenPadding 的页面出现「双倍左内陷」，与 HomeScreen 底部提示栏
+ * 左边距不一致）。
+ *
+ * 例外：HomeScreen 因其 [cn.mocabolka.run.ui.components.StatusBar] 内部已使用
+ * [Dimens.ContentHorizontal]，根容器无法重复叠加，故需显式传入
+ * `horizontalPadding = Dimens.ContentHorizontal` 以保持原视觉；其它页面直接使用默认 0.dp，
+ * 底部提示栏与页面内容自然对齐。
  */
 @Composable
 fun BottomHintBar(
     modifier: Modifier = Modifier,
+    horizontalPadding: Dp = 0.dp,
     content: @Composable RowScope.() -> Unit
 ) {
     Column(
@@ -313,7 +335,7 @@ fun BottomHintBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(horizontal = Dimens.ContentHorizontal),
+                .padding(horizontal = horizontalPadding),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Dimens.HintItemGap)
         ) {
@@ -344,9 +366,9 @@ fun IfGamepad(
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    // 使用 Flow 响应式监听，避免静态方法不响应插拔的问题
-    val gamepadConnected by GamepadDetector.gamepadConnectedFlow(context)
-        .collectAsState(initial = GamepadDetector.isGamepadConnected())
+    // 使用 Flow 响应式监听，避免静态方法不响应插拔的问题；remember 防重组时重复订阅
+    val gamepadFlow = remember(context) { GamepadDetector.gamepadConnectedFlow(context) }
+    val gamepadConnected by gamepadFlow.collectAsState(initial = GamepadDetector.isGamepadConnected())
     if (gamepadConnected) {
         content()
     }
@@ -359,11 +381,40 @@ fun IfGamepad(
  */
 @Composable
 fun GamepadBottomHintBar(
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    horizontalPadding: Dp = Dimens.ContentHorizontal,
     content: @Composable RowScope.() -> Unit
 ) {
     IfGamepad {
-        BottomHintBar(modifier = modifier, content = content)
+        BottomHintBar(modifier = modifier, horizontalPadding = horizontalPadding, content = content)
+    }
+}
+
+/**
+ * 居中提示文本（空状态 / 错误状态 / 加载失败等）。
+ * 由原 GameScreenshotsAllActivity 的 private CenteredHint 提升为全应用共享组件，
+ * 统一空状态文案的版式与配色（ mutedOnSurface(Medium) ），避免各页面手写不一致的居中提示。
+ *
+ * @param text   提示文案
+ * @param icon   可选图标（如搜索空态的 SearchOff、错误态的 Warning）
+ * @param style  文本样式（默认 bodyMedium）
+ * @param color  文本颜色（默认 mutedOnSurface(Medium)）
+ */
+@Composable
+fun CenteredHint(
+    text: String,
+    modifier: Modifier = Modifier.fillMaxSize(),
+    icon: ImageVector? = null,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
+    color: Color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium)
+) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, tint = color)
+            }
+            Text(text, style = style, color = color)
+        }
     }
 }
 
@@ -399,3 +450,138 @@ fun GamepadVisible(
  * 骑缝浮块属于重复且易与右栏内容相互遮挡的视觉噪声，不再渲染。
  * 保留此注释以说明历史决策，避免后续误重新引入。
  */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 归一化子页面标题栏（基准 = 权限页「权限」子页面所用 SubPageTopBar）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 归一化子页面标题栏（基准 = 权限页「权限」子页面所用 [SubPageTopBar]）。
+ *
+ * 全应用所有一/二/三级子页面统一引用此部件，保证标题栏高度、水平边距、返回按钮与
+ * 退出提示完全一致，消除各页面"自绘标题栏"带来的高度漂移与风格不统一。
+ *
+ * 遵循手柄提示规则：
+ * - 返回按钮（[SubPageBackButton]）固定居左，作为默认退出入口（不进底部提示栏）。
+ * - 退出（B）提示固定置于右上角（[GamepadHintBar]，仅手柄连接时显示）。
+ * - 个性化按钮（如游戏页收藏/信息/主题、设置页开关等）通过 [actions] 槽位注入；
+ *   各子页面将自身的独立按钮作为单独部件引用，避免散落的自定义实现。
+ *
+ * @param title          标题文本
+ * @param onBack         返回/退出回调（触摸点击与手柄 B 共用）
+ * @param isBackFocused  返回按钮是否处于焦点高亮（自定义焦点状态机传入）
+ * @param onBackFocus    返回按钮获得焦点回调（用于驱动自定义焦点状态机）
+ * @param actions        标题栏右侧、退出提示前的个性化按钮槽（[RowScope]）
+ * @param showExitHint   是否在右上角显示「B 返回」提示（默认 true）
+ * @param contentColor   标题与图标颜色（默认 onBackground；美术页传 [Color.White]）
+ * @param titleStyle     标题文字样式（默认 titleLarge）
+ */
+@Composable
+fun SubPageTitleBar(
+    title: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    isBackFocused: Boolean = false,
+    onBackFocus: () -> Unit = {},
+    actions: @Composable RowScope.() -> Unit = {},
+    showExitHint: Boolean = true,
+    exitLabel: String = "返回",
+    contentColor: Color = MaterialTheme.colorScheme.onBackground,
+    titleStyle: TextStyle = MaterialTheme.typography.titleLarge,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().then(modifier),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SubPageBackButton(
+            onClick = onBack,
+            isFocused = isBackFocused,
+            onFocus = onBackFocus,
+            contentColor = contentColor
+        )
+        Spacer(Modifier.width(Dimens.sm))
+        Text(
+            text = title,
+            style = titleStyle,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.weight(1f))
+        actions()
+        if (showExitHint) {
+            Spacer(Modifier.width(Dimens.sm))
+            GamepadHintBar(
+                modifier = Modifier.padding(end = Dimens.xs),
+                content = { Hint(KeyToken.B, exitLabel, textColor = contentColor) }
+            )
+        }
+    }
+}
+
+/**
+ * 归一化标题栏返回按钮（基准 = 权限页 SubPageTopBar 的返回按钮）。
+ * 固定 40dp 圆角块 + 左箭头；支持自定义焦点状态机高亮。
+ * 美术背景页可传 [contentColor]=[Color.White] 与深色 [backgroundColor] 保证对比。
+ */
+@Composable
+fun SubPageBackButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isFocused: Boolean = false,
+    onFocus: () -> Unit = {},
+    contentColor: Color = MaterialTheme.colorScheme.onBackground,
+    // 半透明焦点框仅在「手柄已连接 且 焦点在此」时出现，绝不常驻（纯触控/未连手柄时透明）
+    backgroundColor: Color = if (isFocused && LocalShowFocusIndicators.current) SurfaceTokens.focusBgStrong() else Color.Transparent,
+    icon: ImageVector = Icons.AutoMirrored.Filled.ArrowBack,
+) {
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .clickable { onFocus(); onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = "返回",
+            tint = contentColor,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/**
+ * 归一化标题栏动作按钮：供 [SubPageTitleBar] 的 [actions] 槽位引用的独立部件。
+ * 不同子页面的个性化按钮（如游戏页收藏/信息/主题）统一走此部件，避免散落自定义实现。
+ */
+@Composable
+fun TitleBarIconButton(
+    onClick: () -> Unit,
+    imageVector: ImageVector,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    isFocused: Boolean = false,
+    onFocus: () -> Unit = {},
+    contentColor: Color = MaterialTheme.colorScheme.onBackground,
+    // 半透明焦点框仅在「手柄已连接 且 焦点在此」时出现，绝不常驻（纯触控/未连手柄时透明）
+    backgroundColor: Color = if (isFocused && LocalShowFocusIndicators.current) SurfaceTokens.focusBgStrong() else Color.Transparent,
+) {
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .clickable { onFocus(); onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = contentColor,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}

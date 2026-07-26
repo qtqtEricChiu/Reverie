@@ -3,7 +3,6 @@ package cn.mocabolka.run.compat
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 
@@ -14,23 +13,38 @@ import android.provider.Settings
  */
 object ColorOSCompat {
 
+    /** isColorOS 结果缓存：ROM 属性运行期不变，避免每次调用都 fork getprop 子进程。 */
+    @Volatile
+    private var colorOsCached: Boolean? = null
+
     fun isColorOS(): Boolean {
+        colorOsCached?.let { return it }
         val brand = Build.BRAND.lowercase()
         val manufacturer = Build.MANUFACTURER.lowercase()
-        val rom = getProp("ro.build.version.opporom") + getProp("ro.rom.version")
-        return brand.contains("oppo") || brand.contains("oneplus") ||
-                manufacturer.contains("oppo") || manufacturer.contains("oneplus") ||
-                rom.contains("coloros")
+        val byBrand = brand.contains("oppo") || brand.contains("oneplus") ||
+                manufacturer.contains("oppo") || manufacturer.contains("oneplus")
+        // 品牌命中即可短路，跳过昂贵的 getprop 子进程调用
+        val result = byBrand ||
+                (getProp("ro.build.version.opporom") + getProp("ro.rom.version")).contains("coloros")
+        colorOsCached = result
+        return result
     }
 
     private fun getProp(name: String): String = runCatching {
-        val p = Runtime.getRuntime().exec("getprop $name")
+        val p = ProcessBuilder("getprop", name).redirectErrorStream(true).start()
         try {
-            p.inputStream.bufferedReader().readText().trim()
+            val text = p.inputStream.bufferedReader().use { it.readText() }.trim()
+            // 带超时等待，防止异常 ROM 上子进程挂起拖死调用线程
+            if (!p.waitFor(GETPROP_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                p.destroyForcibly()
+            }
+            text
         } finally {
             p.destroy() // 释放子进程句柄，避免句柄泄漏
         }
     }.getOrDefault("")
+
+    private const val GETPROP_TIMEOUT_MS = 1500L
 
     /** 打开自启动 / 后台管理页（ColorOS 安全中心）。逐条尝试深链，全部失败回退到系统设置。 */
     fun openAutoStartSettings(context: Context) {

@@ -43,4 +43,24 @@
 
     <!-- 别名：Theme.Landscape = Theme.Launcher，向后兼容旧引用 -->
     <style name="Theme.Landscape" parent="Theme.Launcher" />
+
+    <!-- 子页面原生过渡（Activity 栈滑动）：L2 美术资源获取 / L3 提取 / 自定义主题 -->
+    <style name="Theme.Reverie.Slide" parent="Theme.Launcher">
+        <item name="android:windowAnimationStyle">@style/ActivitySlideAnimation</item>
+    </style>
+    <style name="ActivitySlideAnimation">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_in_left</item>
+        <item name="android:activityOpenExitAnimation">@anim/slide_out_right</item>
+        <item name="android:activityCloseEnterAnimation">@anim/slide_in_right</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_out_left</item>
+    </style>
+
+    <!--
+      游戏页（GamePageActivity）专属窗口动画：淡入淡出，不使用水平滑动。
+      原因：游戏页自身用 Compose AnimatedVisibility(subPageEnter) 做左推入场，
+      若平台再叠加一层水平滑动转场（部分 ROM 的 Animation.Activity 默认即为滑动），
+      会与 Compose 左推叠加成"双层左推"，观感突兀。
+      改为淡入淡出后：入场 = Compose 单一左推 + 轻微淡入（不再有第二个水平推）；
+      退场淡出可保持窗口存活，确保 Compose subPageExit 滑动退场可见。
+    -->
 </resources>
