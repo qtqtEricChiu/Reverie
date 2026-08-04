@@ -15,6 +15,8 @@ app/src/main/assets/gameart/
 *.apk
 *.aab
 *.jar
+# Gradle Wrapper jar 必须入库（GitHub Actions 依赖它启动 ./gradlew）
+!gradle/wrapper/gradle-wrapper.jar
 
 # IDE / OS
 .idea/
