@@ -19,7 +19,7 @@ import java.util.Calendar
  * - 小时分布缓存：在 sync 时按小时切片累加，避免每次 getHourly() 实时拉取系统事件。
  * - JSON 写入使用临时文件 + rename 保证原子性。
  */
-class UsageStatsRepository(private val context: Context) {
+class UsageStatsRepository(private val context: Context) : HotStore {
 
     private val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
@@ -48,7 +48,6 @@ class UsageStatsRepository(private val context: Context) {
 
     /** ── 小时分布缓存（sync 时维护） ── */
     /** 今日逐小时明细：每应用(时长ms, 启动次数)。仅当天有效。 */
-    /** 逐小时明细（公开，供跨包查询）。时长/次数/每应用。 */
     data class HourlyDetail(
         val ms: LongArray,
         val count: IntArray,
@@ -156,6 +155,7 @@ class UsageStatsRepository(private val context: Context) {
         runCatching {
             if (!file.exists()) return
             val root = JSONObject(file.readText())
+            val version = root.optInt("version", 1)
             lastSync = root.optLong(KEY_LAST_SYNC, 0L)
             val jTotals = root.optJSONObject(KEY_TOTALS) ?: JSONObject()
             jTotals.keys().forEach { pkg ->
@@ -180,6 +180,18 @@ class UsageStatsRepository(private val context: Context) {
             val jHourly = root.optJSONObject(KEY_HOURLY) ?: JSONObject()
             jHourly.keys().forEach { date ->
                 HourlySnap.fromJson(jHourly.optJSONObject(date))?.let { hourly[date] = it }
+            }
+            // 旧版（version<2）迁移：365 天全量 → 热层 90 天 + 冷层按月归档
+            if (version < StorageConfig.SCHEMA_VERSION) {
+                runCatching {
+                    val bak = java.io.File(file.parentFile, "${FILE_NAME}.bak")
+                    if (!bak.exists()) file.copyTo(bak, overwrite = false)
+                    val cutoff = dateKeyOf(
+                        System.currentTimeMillis() - StorageConfig.HOT_WINDOW_DAYS * 24L * 60 * 60 * 1000
+                    )
+                    ArchiveRotation.rotateExpired(this@UsageStatsRepository, archiveDir(), cutoff)
+                    save()
+                }.onFailure { e -> Log.w(TAG, "旧版数据迁移失败，保留原状", e) }
             }
         }.onFailure { e ->
             Log.w(TAG, "读取使用时长持久化失败，已忽略", e)
@@ -208,6 +220,7 @@ class UsageStatsRepository(private val context: Context) {
             val jHourly = JSONObject()
             hourly.forEach { (date, snap) -> jHourly.put(date, snap.toJson()) }
             val root = JSONObject().apply {
+                put("version", StorageConfig.SCHEMA_VERSION)
                 put(KEY_LAST_SYNC, lastSync)
                 put(KEY_DAYS, jDays)
                 put(KEY_TOTALS, jTotals)
@@ -934,14 +947,14 @@ class UsageStatsRepository(private val context: Context) {
     // 时间工具
     // ──────────────────────────────────────────────
     /**
-     * 裁剪超过 [RETENTION_DAYS] 的按天明细（days / dayCounts / hourly）。
-     * dateKey 为 yyyy-MM-dd 零填充格式，字典序即时间序，直接字符串比较。
-     * 注意：totals / totalCounts 是全期累计聚合，保持不变——裁剪只影响按天回看。
+     * 冷热旋转：将超出热层窗口（[StorageConfig.HOT_WINDOW_DAYS] 天）的按天明细迁移到
+     * 冷层按月归档，成功后从热层删除（days / dayCounts / hourly）。
+     * totals / totalCounts 为全期累计，不受旋转影响。
      */
     private fun pruneOldDays() {
-        val cutoff = dateKey(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -RETENTION_DAYS) })
-        days.keys.removeAll { it < cutoff }
-        dayCounts.keys.removeAll { it < cutoff }
+        val cutoff = dateKeyOf(System.currentTimeMillis() - StorageConfig.HOT_WINDOW_DAYS * 24L * 60 * 60 * 1000)
+        ArchiveRotation.rotateExpired(this, archiveDir(), cutoff)
+        // hourly 为热层专有（冷层格式不含小时分布），超出窗口者直接清除
         hourly.keys.removeAll { it < cutoff }
     }
 
@@ -949,6 +962,30 @@ class UsageStatsRepository(private val context: Context) {
         "%04d-%02d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
 
     private fun todayKey(): String = dateKey(Calendar.getInstance())
+
+    private fun dateKeyOf(ms: Long): String =
+        dateKey(Calendar.getInstance().apply { timeInMillis = ms })
+
+    /** 冷层根目录：filesDir/archives/usage_stats。 */
+    private fun archiveDir(): java.io.File = java.io.File(context.filesDir, "archives/usage_stats")
+
+    // ── HotStore 实现（供分层查询 / 旋转复用）──
+    override fun hasHotDate(dateKey: String): Boolean = days.containsKey(dateKey)
+
+    override fun getHotDay(dateKey: String): Map<String, DayEntry> {
+        val msMap = days[dateKey] ?: return emptyMap()
+        val cntMap = dayCounts[dateKey] ?: emptyMap()
+        val pkgs = msMap.keys + cntMap.keys
+        return pkgs.associateWith { pkg -> DayEntry(pkg, msMap[pkg] ?: 0L, cntMap[pkg] ?: 0) }
+    }
+
+    override fun hotDateKeys(): Set<String> = days.keys
+
+    override fun removeHotDate(dateKey: String) {
+        days.remove(dateKey)
+        dayCounts.remove(dateKey)
+        hourly.remove(dateKey)
+    }
 
     private fun weekStartMs(anchorMs: Long = System.currentTimeMillis()): Long = Calendar.getInstance().apply {
         timeInMillis = anchorMs
@@ -986,7 +1023,5 @@ class UsageStatsRepository(private val context: Context) {
         private const val MIN_VALID_DURATION_MS = 1000L
         /** 单次最大使用时长（ms）：> 24h 截断，防止系统 bug 产生的错误时间戳。 */
         private const val MAX_SINGLE_DURATION_MS = 24L * 60 * 60 * 1000
-        /** 按天明细最长保留天数：超过后在 sync 时裁剪，防止 days/dayCounts/hourly 无限膨胀。 */
-        private const val RETENTION_DAYS = 365
     }
 }

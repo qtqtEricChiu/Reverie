@@ -182,7 +182,7 @@ fun AppDetailPanel(
                 1.dp,
                 // 玻璃态下边框换更亮的白描边（0.18f）——半透表面上主题 outline 几乎不可见
                 if (glass) Color.White.copy(alpha = 0.18f)
-                else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                else SurfaceTokens.restingBorderColorFaint(),
                 RoundedCornerShape(Dimens.lg)
             )
             // 顶部光源反射高光（挂前景卡片；磨砂模糊由 HomeScreen 壁纸层 frosted 承担，
@@ -278,7 +278,7 @@ fun AppDetailPanel(
                 ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(Dimens.RadiusXs))
                             .background(MaterialTheme.colorScheme.primaryContainer)
                             .padding(horizontal = 6.dp, vertical = 2.dp),
                         contentAlignment = Alignment.Center
@@ -724,7 +724,7 @@ private fun UsageBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
+                .clip(RoundedCornerShape(Dimens.RadiusXs)),
             color = MaterialTheme.colorScheme.primary,
             trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
         )

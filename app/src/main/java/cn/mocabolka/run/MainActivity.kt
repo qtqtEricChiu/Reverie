@@ -7,7 +7,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
-import cn.mocabolka.run.ui.enablePredictiveBack
+
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -18,6 +18,7 @@ import cn.mocabolka.run.compat.CompatGuideActivity
 import cn.mocabolka.run.compat.OrientationManager
 import cn.mocabolka.run.gamepad.GamepadEvent
 import cn.mocabolka.run.gamepad.GamepadManager
+import cn.mocabolka.run.gamepad.InputModeManager
 import cn.mocabolka.run.ui.DisplayRefresh
 import cn.mocabolka.run.ui.Haptics
 import cn.mocabolka.run.ui.HapticIntensity
@@ -110,13 +111,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Reverie 为主屏：不再作为系统桌面，打开即进入空间（预测手势返回退出应用）。
-        // 预测返回手势（Android 13+ / API 33+，本项目 minSdk=36 恒生效）：
-        // 通过 onBackPressedDispatcher 注册 OnBackPressedCallback，系统会在用户执行返回手势时
-        // 绘制预测动画，松手后才回调本 callback。我们将其转成 GamepadEvent.Back 推入事件流，
-        // 复用 HomeScreen 现有的"二次确认气泡"逻辑（首次返回弹气泡、再次返回才退出），
-        // 避免系统默认 finish() 绕过二次确认直接退出 Reverie。
-        enablePredictiveBack { viewModel.pushEvent(GamepadEvent.Back) }
+        // Reverie 为主屏：打开即进入空间。预测性返回（minSdk=36 恒生效）由系统默认行为接管——
+        // 不注册任何 OnBackInvokedCallback（PRIORITY_DEFAULT 会阻止系统动画），主屏执行系统返回/右滑即由系统
+        // 绘制桌面预览并直接退出应用（用户决策「优先预测性返回手势」）。手柄 B 键仍由 GamepadManager 经事件流
+        // 走 HomeScreen 的二次确认气泡，与系统手势路径互不干扰。
 
         setContent {
             HomeScreen(viewModel = viewModel, onExit = { finish() })
@@ -180,13 +178,25 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // R13：任意按键视为交互，刷新时间戳以维持在高刷新率
         if (event.action == KeyEvent.ACTION_DOWN) markInteraction()
+        // 可信手柄按键 → 切到手柄模式（焦点指示器恢复显示）
+        if (gamepad.isTrustedGamepadDevice(event.deviceId)) InputModeManager.toGamepad()
         return if (gamepad.handleKeyEvent(event)) true else super.dispatchKeyEvent(event)
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         // R13：手柄摇杆/移动视为交互
         markInteraction()
+        // 可信手柄摇杆 → 切到手柄模式
+        if (gamepad.isTrustedGamepadDevice(event.deviceId)) InputModeManager.toGamepad()
         return if (gamepad.handleMotionEvent(event)) true else super.onGenericMotionEvent(event)
+    }
+
+    // 触屏事件：手指按下即切到触控模式（焦点指示器全部隐藏）。纯状态更新，不拦截派发。
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            InputModeManager.toTouch()
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     /** R13：记录用户交互时刻，用于空闲刷新率回落判定。 */

@@ -21,13 +21,6 @@ import androidx.compose.ui.unit.dp
 /**
  * 全局语义表面令牌（Surface Tokens）—— 归一化所有"散落的 alpha 魔法值"的单一来源。
  *
- * 问题背景：通查全代码库后发现，焦点态背景、卡片表面、遮罩（scrim）、
- * 弱化文字等大量视觉 alpha 各自硬编码（0.10 / 0.12 / 0.14 / 0.18 / 0.20 / 0.25、
- * scrim 0.55 / 0.6、surfaceVariant 0.30 / 0.45 / 0.50 / 0.95、onSurfaceVariant
- * 0.3 / 0.4 / 0.5 / 0.6 / 0.7 / 0.8、按压 0.08 等），且**存在不一致**
- * （Theme 的 scrim=0.6 与 MotionSpec.ScrimAlpha=0.55 冲突；
- * AppDetailPanel 焦点 0.10 与 AppTile 0.20 不一致）。
- *
  * 设计意图：所有"派生自 MaterialTheme.colorScheme 的带 alpha 语义色"都从这里取，
  * 形成稳定的全局变量关系 —— 改一处即全站生效，杜绝漂移。
  * 与既有资产的关系：
@@ -35,9 +28,8 @@ import androidx.compose.ui.unit.dp
  *  - [MotionSpec.ScrimAlpha] 是遮罩 alpha 的唯一真值，本类 [scrim] 引用它；
  *  - 圆角/线宽统一引用 [Dimens] 与 [MaterialTheme.shapes]，不自造。
  *
- * 派发方式：Composable 内通过 `MaterialTheme.colorScheme` 即时派生（无状态、零重组开销），
- * 各页面（AppTile / AppListItem / AppDetailPanel / SubPage / SettingsPage / StatusBar /
- * StatsScreen / HomeScreen Toast）统一调用，不再手写 `primary.copy(alpha = Xf)`。
+ * 派发方式：Composable 内通过 `MaterialTheme.colorScheme` 即时派生（无状态、零重组开销）。
+ * 各页面统一调用，不再手写 `primary.copy(alpha = Xf)`。
  */
 object SurfaceTokens {
 
@@ -92,8 +84,20 @@ object SurfaceTokens {
      * 注意：焦点/按压等**状态语义**的 Strong 背景不应换用本函数（保持状态对比度）。
      */
     @Composable
-    fun cardSurfaceGlassAware(level: CardLevel = CardLevel.Default): Color {
-        val effective = if (LocalGlassEnabled.current) CardLevel.Subtle else level
+    fun cardSurfaceGlassAware(
+        level: CardLevel = CardLevel.Default,
+        /** 是否处于"穿透壁纸"模式（壁纸在卡片后方可见）。
+         *  为 true 且玻璃开启时 → 进一步降到 [CardLevel.Overlay]（0.22，最透档），
+         *  让磨砂壁纸清晰透出，与 AppDetailPanel 的玻璃处理保持一致；
+         *  为 false 时仅玻璃开关生效（降到 Subtle）。 */
+        wallpaperBehind: Boolean = false
+    ): Color {
+        val glass = LocalGlassEnabled.current
+        val effective = when {
+            glass && wallpaperBehind -> CardLevel.Overlay
+            glass -> CardLevel.Subtle
+            else -> level
+        }
         return cardSurface(effective)
     }
 
@@ -155,6 +159,20 @@ object SurfaceTokens {
      */
     @Composable
     fun restingBorderColorSoft(): Color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+
+    /**
+     * 极弱 resting 描边（outline + 0.15f，用于玻璃/实色面板的轮廓暗示——
+     * 半透表面上 0.25/0.30 档会显脏，此档仅提供"有边"的知觉）。
+     */
+    @Composable
+    fun restingBorderColorFaint(): Color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+
+    /**
+     * 发丝分割线色（outline + 0.10f，用于提示栏/列表内部的 1dp 以下分割线，
+     * 语义是"分区"而非"描边"，刻意弱于所有 resting 描边档）。
+     */
+    @Composable
+    fun hairlineDividerColor(): Color = MaterialTheme.colorScheme.outline.copy(alpha = 0.10f)
 
     /**
      * 玻璃拟态深色底（KeyBadge Glass / 浮块的统一底色）。

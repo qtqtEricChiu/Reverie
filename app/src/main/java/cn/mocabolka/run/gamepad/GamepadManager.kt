@@ -16,11 +16,11 @@ import kotlin.math.abs
  * 附带 Xbox 协议兼容，确保通用安卓手柄无需额外配置即可完整导航。
  *
  * 导航策略：
- * - 导航仅由左摇杆（含十字键帽 hat switch）驱动，通过 [handleMotionEvent] 产生
- *   [GamepadEvent.Navigate]。
- * - 十字键（D-pad）实体按键不再产生任何导航事件，放行给系统处理。
- * - 十字左/右键产生的 Navigate 事件仅在 HomeScreen 的 HOME/STATS Tab 宽屏下
- *   被用于「切换焦点栏」，这是全工程唯二的十字键绑定场景。
+ * - 导航由左摇杆与十字键帽（hat switch）共同驱动，经由 [handleMotionEvent] 产生
+ *   [GamepadEvent.Navigate]（十字键帽的 hat 轴承载导航）。
+ * - 十字键实体四向按键（DOWN/UP 等）被消费但不发射导航，仅动作语义交由上层。
+ * - 十字左/右键产生的 Navigate 事件仅用于 HomeScreen 的 HOME/STATS Tab 宽屏下
+ *   「切换焦点栏」，是全工程极少数的十字键导航绑定场景。
  * - 动作键（A/B/X/Y/LB/RB/Menu 等）始终被消费，由上层解释。
  */
 class GamepadManager(
@@ -113,7 +113,7 @@ class GamepadManager(
      * 防止未经物理输入即触发启动应用、切 Tab 等语义操作。
      * 非可信来源不"吞掉"，而是放行给系统按普通按键处理（功能优雅降级）。
      */
-    private fun isTrustedGamepadDevice(deviceId: Int): Boolean {
+    internal fun isTrustedGamepadDevice(deviceId: Int): Boolean {
         val dev = InputDevice.getDevice(deviceId) ?: return false
         if (dev.isVirtual) return false // 虚拟键盘/注入设备一律不信任
         val s = dev.sources

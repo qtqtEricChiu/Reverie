@@ -34,8 +34,14 @@ class CfWebViewClient : WebViewClient() {
         return !SteamWebViewPolicy.isAllowedTopLevelNavigation(url)
     }
 
-    /** 最大轮询次数（每秒一次，约 30s），避免无限占用 WebView。 */
-    private val MAX_POLLS = 30
+    /**
+     * 轮询无固定次数上限——必须撑到终态，确保 Downloading 阶段的二次 CF challenge
+     * 仍能被探针捕获（vital 修复：旧 30 次限制导致 30s 后探针"聋了"，CF 状态机彻底失活）。
+     * 收口统一在 [stopPolling]：
+     *  - 终态 Done / Error（Activity 侧 LaunchedEffect(state) 触发）；
+     *  - WebView dispose（DisposableEffect.onDispose 触发）。
+     * 仅以上两个边界停止；中途页面 DOM / CF 覆盖都不打断。
+     */
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pollRunnable: Runnable? = null
@@ -434,11 +440,8 @@ class CfWebViewClient : WebViewClient() {
 
     private fun startPolling(view: WebView?) {
         stopPolling()
-        var polls = 0
         pollRunnable = object : Runnable {
             override fun run() {
-                if (polls >= MAX_POLLS) { ExtractionTiming.markMaxPolls(); pollRunnable = null; return }
-                polls++
                 ExtractionTiming.recordPollRound()
                 runCatching { view?.evaluateJavascript(getJs(), null) }
                 pollRunnable = this

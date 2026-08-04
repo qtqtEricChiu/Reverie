@@ -12,7 +12,12 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithContent
@@ -107,6 +112,53 @@ object MotionSpec {
     const val FocusScale = 1.14f
     /** 按下缩放幅度（统一）。 */
     const val PressScale = 0.95f
+}
+
+/**
+ * 错峰入场动画统一 Hook（C-EXT1 归一化落点，沉淀到全局动画机）。
+ * 在 [effectKeys]（默认仅 [entranceKey]）变化时按 [entranceIndex] 计算错峰延迟，
+ * 延迟结束后元素淡入并从 [startOffsetY] dp 上移到 0。
+ * [reduceMotion] 或 [skipEntrance] 时立即到位（零动画）。
+ * [shouldAppear] 为 false 时复位为未入场（用于视口驱动的重放，如瀑布流槽位）。
+ * 返回 (alpha, translationY)，直接喂给 graphicsLayer。
+ * 行为与原各调用方手写样板逐一对齐（含初始态 / 依赖键 / shouldAppear 守卫）。
+ */
+@Composable
+fun rememberStaggeredEntrance(
+    entranceIndex: Int,
+    entranceKey: String,
+    reduceMotion: Boolean = false,
+    skipEntrance: Boolean = false,
+    shouldAppear: Boolean = true,
+    effectKeys: Array<out Any?> = arrayOf(entranceKey),
+    initialAppeared: Boolean? = null,
+    perMs: Int = 8,
+    maxMs: Int = 160,
+    startOffsetY: Float = 12f
+): Pair<Float, Float> {
+    var appeared by remember(*effectKeys) {
+        mutableStateOf(initialAppeared ?: (reduceMotion || skipEntrance))
+    }
+    LaunchedEffect(*effectKeys, shouldAppear) {
+        if (!shouldAppear) { appeared = false; return@LaunchedEffect }
+        if (appeared) return@LaunchedEffect
+        if (reduceMotion || skipEntrance) { appeared = true; return@LaunchedEffect }
+        appeared = false
+        val delayMs = MotionSpec.staggerDelay(entranceIndex, perMs = perMs, maxMs = maxMs)
+        if (delayMs > 0) delay(delayMs)
+        appeared = true
+    }
+    val alpha by animateFloatAsState(
+        targetValue = if (appeared) 1f else 0f,
+        animationSpec = MotionSpec.Fast,
+        label = "staggerAlpha"
+    )
+    val y by animateFloatAsState(
+        targetValue = if (appeared) 0f else startOffsetY,
+        animationSpec = MotionSpec.Fast,
+        label = "staggerY"
+    )
+    return alpha to y
 }
 
 /**

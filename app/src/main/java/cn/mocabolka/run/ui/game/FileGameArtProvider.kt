@@ -55,7 +55,8 @@ class FileGameArtProvider(private val context: Context) : GameArtProvider {
                 header = null,
                 accentColor = meta.accentColor,
                 steamAppId = meta.steamAppId,
-                logoPosition = meta.logoPosition
+                logoPosition = meta.logoPosition,
+                isCustom = meta.custom
             )
         }
 
@@ -87,7 +88,8 @@ class FileGameArtProvider(private val context: Context) : GameArtProvider {
             header = header?.let { GameArtImage(file(it)) },
             accentColor = meta?.accentColor,
             steamAppId = meta?.steamAppId,
-            logoPosition = meta?.logoPosition
+            logoPosition = meta?.logoPosition,
+            isCustom = meta?.custom == true
         )
     }
 
@@ -101,7 +103,8 @@ class FileGameArtProvider(private val context: Context) : GameArtProvider {
             Meta(
                 accentColor = hex?.let { runCatching { ComposeColor(AndroidColor.parseColor(it)) }.getOrNull() },
                 steamAppId = o.optLong("steamAppId", -1L).takeIf { it >= 0 },
-                logoPosition = o.optString("logoPosition").takeIf { it.isNotBlank() }?.let { LogoPosition.fromJson(it) }
+                logoPosition = o.optString("logoPosition").takeIf { it.isNotBlank() }?.let { LogoPosition.fromJson(it) },
+                custom = o.optBoolean("custom", false)
             )
         } catch (e: Exception) {
             // meta.json 损坏时留痕，便于排查游戏页主色丢失
@@ -113,6 +116,7 @@ class FileGameArtProvider(private val context: Context) : GameArtProvider {
     private data class Meta(
         val accentColor: ComposeColor?,
         val steamAppId: Long?,
-        val logoPosition: LogoPosition? = null
+        val logoPosition: LogoPosition? = null,
+        val custom: Boolean = false
     )
 }

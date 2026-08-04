@@ -23,7 +23,7 @@ import kotlinx.coroutines.withContext
  * 2. 初始化：向用户索要一张该游戏的截图/录屏（如 `Screenshot_2026-07-15-18-32-49-65_0dfddd8a234be85a617c2f29d20ccb80`），
  *    记忆其文件名后缀哈希值 `0dfddd8a234be85a617c2f29d20ccb80`；此后该设备上所有后缀为该哈希的截图/视频均标记为该应用截图。
  * 3. 呈现：扫描授权文件夹内所有文件名后缀哈希命中的截图/视频，用户点击即跳转第三方查看器（系统图片/视频播放器）。
- * 4. 设备不支持：若样例文件文件名不含哈希后缀（即该设备截图命名不携带后缀哈希），判定设备不支持，全设备屏蔽该功能。
+ * 4. 不支持（按游戏）：若某游戏样例文件文件名不含哈希后缀，仅对该游戏屏蔽截图归类，不影响其它游戏的截图照常归类。
  *
  * 关键约束：
  * - 哈希后缀为文件名末尾 `_<16~64位十六进制>`（可带扩展名），与具体文件名前缀/时间无关，设备级稳定。
@@ -56,7 +56,7 @@ object GameScreenshots {
         NEED_SAMPLE,
         /** 已就绪：已学习哈希后缀，可按后缀扫描并呈现。 */
         READY,
-        /** 该设备截图文件名不含哈希后缀，无法自动归类，全设备屏蔽。 */
+        /** 该游戏截图文件名不含哈希后缀，无法自动归类，仅屏蔽该游戏。 */
         UNSUPPORTED
     }
 
@@ -67,9 +67,14 @@ data class ScreenshotGalleryState(
     val onRequestTree: () -> Unit,
     val onRequestSample: () -> Unit,
     val onOpen: (Shot) -> Unit,
-    val onViewAll: ((androidx.compose.ui.graphics.Color) -> Unit)? = null
+    val onViewAll: ((androidx.compose.ui.graphics.Color) -> Unit)? = null,
+    /** UNSUPPORTED（截图文件名无哈希后缀）时是否收折成一行（按应用记忆，默认收折）。 */
+    val unsupportedCollapsed: Boolean = false,
+    /** 收折行被点击/激活时展开完整卡片（仅当前应用）。 */
+    val onExpandUnsupported: () -> Unit = {},
+    /** 展开后「重试」：清除该游戏的不支持标记与哈希，重新进入初始化流程（重选样例）。 */
+    val onRetry: () -> Unit = {}
 )
-
 
     /** 持久化存储（SharedPreferences，零新增依赖）。 */
     class Store(context: Context) {
@@ -82,8 +87,9 @@ data class ScreenshotGalleryState(
         fun setTreeUri(uri: Uri) = prefs.edit().putString(KEY_TREE, uri.toString()).apply()
         fun clearTreeUri() = prefs.edit().remove(KEY_TREE).apply()
 
-        fun isDeviceUnsupported(): Boolean = prefs.getBoolean(KEY_UNSUPPORTED, false)
-        fun setDeviceUnsupported() = prefs.edit().putBoolean(KEY_UNSUPPORTED, true).apply()
+        fun isUnsupported(pkg: String): Boolean = prefs.getBoolean(unsupportedKey(pkg), false)
+        fun setUnsupported(pkg: String) = prefs.edit().putBoolean(unsupportedKey(pkg), true).apply()
+        fun clearUnsupported(pkg: String) = prefs.edit().remove(unsupportedKey(pkg)).apply()
 
         fun getHash(pkg: String): String? = prefs.getString(hashKey(pkg), null)
         fun setHash(pkg: String, hash: String) = prefs.edit().putString(hashKey(pkg), hash).apply()
@@ -92,7 +98,7 @@ data class ScreenshotGalleryState(
         private fun hashKey(pkg: String) = "hash_$pkg"
         companion object {
             private const val KEY_TREE = "tree_uri"
-            private const val KEY_UNSUPPORTED = "device_unsupported"
+            private fun unsupportedKey(pkg: String) = "unsupported_$pkg"
         }
     }
 
@@ -275,3 +281,17 @@ data class ScreenshotGalleryState(
     private const val THUMB_MAX = 512
     private const val THUMB_CACHE_MAX = 64
 }
+
+/**
+ * 画廊聚焦时 B 键是否应消费（复位选图并退出画廊聚焦，而非关闭整个页面）。
+ *
+ * 该判定内聚于画廊自身状态（[GameScreenshots.ScreenshotGalleryState]），避免在全局按键 handler 中
+ * 散落画廊特有语义（审计 4.4：B 键退出画廊逻辑从全局 handler 移至 ScreenshotGallery 组件内部）。
+ * 与 [GamePage] 中 `galleryItemCount > 0` 的原始判定语义完全一致。
+ */
+val GameScreenshots.ScreenshotGalleryState.hasFocusableContent: Boolean
+    get() {
+        val shots = screenshots
+        val showViewAll = shots.size > 5 && onViewAll != null
+        return shots.isNotEmpty() || showViewAll
+    }

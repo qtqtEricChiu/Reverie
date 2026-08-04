@@ -1,5 +1,7 @@
 package cn.mocabolka.run.ui.theme
 
+import android.content.Context
+import android.content.res.Configuration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -89,15 +91,19 @@ object Dimens {
     // ── 弹窗 ──
     val DialogMaxWidth = 460.dp
     val DialogCloseButtonSize = 28.dp
+    // 统一弹窗容器参数（DialogScaffold 默认值，消除散落的魔法值）
+    val DialogElevation = 6.dp          // Surface tonalElevation（景深投影）
+    val DialogWidthFraction = 0.92f     // 屏幕宽度占比（widthIn 上限内的 fillMaxWidth）
+    val DialogListMaxHeight = 360.dp    // 下拉列表最大高度
 
-    // StatsScreen 宽屏判定阈值（screenWidthDp >= 此值时启用双栏布局）
-    const val WideScreenThresholdDp = 720
+    // StatsScreen 宽屏判定阈值（screenWidthDp >= 此值时启用双栏布局）；统一委托 [DeviceProfile.WIDE_SCREEN_DP]。
+    const val WideScreenThresholdDp = DeviceProfile.WIDE_SCREEN_DP
 
     // StatsScreen 左栏（应用排行）面板宽度
     val RightPanelWidth = 280.dp
 
-    // 窄屏判定阈值（screenWidthDp < 此值时指标卡改为 2 列网格）
-    const val NarrowScreenThresholdDp = 480
+    // 窄屏判定阈值（screenWidthDp < 此值时指标卡改为 2 列网格）；统一委托 [DeviceProfile.NARROW_SCREEN_DP]。
+    const val NarrowScreenThresholdDp = DeviceProfile.NARROW_SCREEN_DP
 
     // ── GamePage 断点尺寸（2026-07-15 GamePage UI 改进方案，第八/七章）──
     // Hero 横幅高度（按断点递增）
@@ -130,7 +136,7 @@ object Dimens {
      * - ≥ 1600dp（TV）：48.dp，远观需宽边距
      * 保留 [ScreenPadding]=24.dp 语义不变，新增此查询以适配电视大屏。
      */
-    fun screenPaddingFor(widthDp: Int): Dp = if (widthDp >= 1600) 48.dp else ScreenPadding
+    fun screenPaddingFor(widthDp: Int): Dp = if (widthDp >= DeviceProfile.TV_MIN_DP) 48.dp else ScreenPadding
 
     // 瀑布屏（曲面屏）两侧最小安全余量：叠加在 displayCutout 左右 inset 之上，
     // 保证曲面边缘不被光学扭曲、避免边缘误触。普通直屏设备 cutout 为 0，仅留此值。
@@ -162,3 +168,74 @@ object Dimens {
     // BottomHintBar 分割线上方与内容的间距（4dp 呼吸，避免分割线紧贴内容）。
     val HintBarDividerTopGap = 4.dp
 }
+
+// ─────────────────────────────────────────────────────────────
+// 设备归一化模块（单一真源）
+//
+// 统一「横竖屏 / 设备档位（手机·平板·电视）」的判定，集中项目内散落的硬编码尺寸阈值
+// （600 / 720 / 1600 等），避免后续各处重复书写魔法值、造成判定口径漂移。
+//
+// 断点对齐 Material Design 3 WindowSizeClass（按 smallestScreenWidthDp）：
+//   COMPACT  < 600dp            → 手机
+//   MEDIUM   600–839dp          → 平板（小）
+//   EXPANDED ≥ 840dp            → 大平板 / 电视
+// 电视额外以「当前宽度 ≥ 1600dp」区分（远观需加宽边距、加粗焦点环）。
+// ─────────────────────────────────────────────────────────────
+object DeviceProfile {
+    // ── 设备档位断点（唯一真源）──
+    const val PHONE_MAX_DP = 600      // 手机 / 平板分界（MD3 Compact↔Medium）
+    const val TABLET_MIN_DP = 600      // 平板下限（语义别名，与 PHONE_MAX_DP 同源）
+    const val EXPANDED_MIN_DP = 840    // MD3 Medium↔Expanded
+    const val TV_MIN_DP = 1600         // 电视（远观大屏）
+
+    // ── 布局宽屏阈值（双栏 / 居中限宽，区别于设备档位）──
+    const val WIDE_SCREEN_DP = 720     // 双栏布局 / 子页宽屏阈值
+    const val NARROW_SCREEN_DP = 480   // 窄屏（指标卡 2 列网格）
+
+    enum class Orientation { PORTRAIT, LANDSCAPE }
+    enum class Class { PHONE, TABLET, TV }
+
+    /**
+     * 设备归一化快照。所有判定均以 [DeviceProfile.from] 产出的本对象为准，调用方只读派生布尔量，
+     * 不自行比较尺寸。
+     */
+    data class Snapshot(
+        val orientation: Orientation,
+        val deviceClass: Class,
+        val smallestWidthDp: Int,
+        val widthDp: Int,
+        val heightDp: Int
+    ) {
+        val isPortrait: Boolean get() = orientation == Orientation.PORTRAIT
+        val isLandscape: Boolean get() = orientation == Orientation.LANDSCAPE
+        val isPhone: Boolean get() = deviceClass == Class.PHONE
+        val isTablet: Boolean get() = deviceClass == Class.TABLET
+        val isTV: Boolean get() = deviceClass == Class.TV
+        /** 大屏（平板 / 电视）：smallestScreenWidthDp ≥ 600，用于美术资源分层等场景。 */
+        val isLargeScreen: Boolean get() = smallestWidthDp >= PHONE_MAX_DP
+        /** 宽屏（双栏 / 居中限宽布局判定，区别于设备档位）。 */
+        val isWideScreen: Boolean get() = widthDp >= WIDE_SCREEN_DP
+    }
+
+    /** 由 [Configuration] 推导归一化快照（Composable / 非 Context 上下文使用）。 */
+    fun from(config: Configuration): Snapshot {
+        val w = config.screenWidthDp
+        val h = config.screenHeightDp
+        val sw = config.smallestScreenWidthDp
+        val orientation = if (w >= h) Orientation.LANDSCAPE else Orientation.PORTRAIT
+        val deviceClass = when {
+            w >= TV_MIN_DP -> Class.TV
+            sw >= TABLET_MIN_DP -> Class.TABLET
+            else -> Class.PHONE
+        }
+        return Snapshot(orientation, deviceClass, sw, w, h)
+    }
+
+    /** 由 [Context] 推导归一化快照（全局统一入口）。 */
+    fun from(context: Context): Snapshot = from(context.resources.configuration)
+}
+
+/** 当前设备的归一化快照（全局统一入口，免 import [DeviceProfile] 也可调用）。 */
+val Context.deviceProfile: DeviceProfile.Snapshot get() = DeviceProfile.from(this)
+/** 当前 [Configuration] 的归一化快照（Composable / 非 Context 上下文使用）。 */
+val Configuration.deviceProfile: DeviceProfile.Snapshot get() = DeviceProfile.from(this)

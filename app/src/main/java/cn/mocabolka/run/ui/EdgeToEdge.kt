@@ -1,12 +1,12 @@
 package cn.mocabolka.run.ui
 
+import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import android.view.WindowManager
-import android.window.OnBackInvokedCallback
-import android.window.OnBackInvokedDispatcher
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import cn.mocabolka.run.ui.theme.isDarkTheme
 
 /**
  * 统一的「边缘到边缘 + 沉浸全屏」窗口配置，所有 Activity 共用，确保预测性返回手势动画正常渲染。
@@ -21,8 +21,8 @@ import androidx.core.view.WindowInsetsControllerCompat
  *
  * 本扩展统一收口：[enableEdgeToEdge]（手势导航/预测返回的关键配置）+ 可选隐藏状态栏（[hideStatusBar]；子页面传 false 以显示状态栏）。
  * `android:enableOnBackInvokedCallback="true"` 已在 manifest 的 <application> 与 Theme.Launcher 中置 true，
- * 配合此处窗口配置，预测性返回即完整生效；各 Activity 的 [androidx.activity.OnBackPressedCallback]
- * （注册为 enabled）会在用户松手后才被回调，系统手势预览动画与 Compose 退场动画可顺畅衔接。
+ * 配合此处窗口配置，预测性返回即完整生效：各 Activity 不注册任何 OnBackInvokedCallback（PRIORITY_DEFAULT 会阻止系统动画），
+ * 系统手势预览动画与默认 finish 衔接；Compose 内部返回由各自的 BackHandler / 事件流处理。
  */
 fun ComponentActivity.setupEdgeToEdgeImmersive(hideStatusBar: Boolean = true) {
     enableEdgeToEdge()
@@ -35,20 +35,26 @@ fun ComponentActivity.setupEdgeToEdgeImmersive(hideStatusBar: Boolean = true) {
     WindowInsetsControllerCompat(window, window.decorView).apply {
         if (hideStatusBar) hide(WindowInsetsCompat.Type.statusBars())
         systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        // 状态栏字体（时钟/电量/通知图标）颜色：向系统发送外观配置。
+        // 浅色背景用深色字（APPEARANCE_LIGHT_STATUS_BARS=true），深色背景用浅色字（false）。
+        // enableEdgeToEdge 默认 always 浅色内容（白字），在浅色模式下不可读，
+        // 故按应用实际生效的深色模式覆盖（与 Theme.kt 判定逻辑保持一致）。
+        isAppearanceLightStatusBars = !isAppInDarkMode()
     }
 }
 
 /**
- * 统一的预测性返回手势注册（Android 13+ / API 33+，本项目 minSdk=36 恒生效）。
- *
- * 此前各 Activity 用 [androidx.activity.OnBackPressedCallback]，虽功能正常但系统不会绘制
- * "从左到右揭示"的预览动画（仅 ModalBottomSheet 等内部用 OnBackInvokedCallback 的组件有动画）。
- * 改用 [OnBackInvokedDispatcher] 后，从左/右边缘滑入返回时系统即实时绘制目标页预览，松手才执行
- * [onBack]，与 Compose 退场动画顺畅衔接。配合 manifest 的 enableOnBackInvokedCallback="true"。
+ * 判定应用实际渲染是否为深色模式，用于决定状态栏字体的明暗。
+ * 与 [cn.mocabolka.run.ui.theme.ThemeKt.LandscapeTheme] 的 darkTheme 计算保持一致：
+ * - LIGHT → 浅色（黑字）
+ * - DARK / AMOLED → 深色（白字）
+ * - SYSTEM → 跟随系统 Configuration 夜间标记
  */
-fun ComponentActivity.enablePredictiveBack(onBack: () -> Unit) {
-    @Suppress("NewApi")
-    onBackInvokedDispatcher.registerOnBackInvokedCallback(
-        OnBackInvokedDispatcher.PRIORITY_DEFAULT
-    ) { onBack() }
+internal fun ComponentActivity.isAppInDarkMode(): Boolean {
+    val systemDark = (resources.configuration.uiMode and
+        Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+    // 复用 Theme.kt 的集中判定，保持与 resolvePageTheme / LandscapeTheme(settings) 完全一致
+    return runCatching { SettingsRepository(this).isDarkTheme(systemDark) }.getOrDefault(systemDark)
 }
+
+

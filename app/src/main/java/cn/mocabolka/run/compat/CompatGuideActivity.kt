@@ -8,7 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import cn.mocabolka.run.ui.enablePredictiveBack
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,7 +45,7 @@ import androidx.compose.ui.unit.dp
 import cn.mocabolka.run.ui.setupEdgeToEdgeImmersive
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import cn.mocabolka.run.ui.rememberRefreshOnResume
 import androidx.lifecycle.lifecycleScope
 import cn.mocabolka.run.compat.ColorOSCompat
 import cn.mocabolka.run.compat.OverlayPermissionHelper
@@ -57,7 +57,11 @@ import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
 import cn.mocabolka.run.ui.theme.Success
 import cn.mocabolka.run.gamepad.Direction
-import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import android.view.KeyEvent
+import android.view.MotionEvent
+import cn.mocabolka.run.gamepad.SubPageActivityHost
+import cn.mocabolka.run.gamepad.markInputModeGamepad
+import cn.mocabolka.run.gamepad.markInputModeTouch
 import cn.mocabolka.run.ui.game.GameScreenshots
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -73,14 +77,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
  * - 完整手柄适配：左摇杆 ↑↓ 切换项、A 触发、B 返回（框架内置）。
  */
 class CompatGuideActivity : ComponentActivity() {
-    /** 右摇杆滚动引擎。 */
-    private lateinit var subPageGamepad: SubPageGamepadHost
+    /** 右摇杆滚动引擎托管（统一封装 SubPageGamepadHost + navFlow + rightStickFirstVisible）。 */
+    private lateinit var subPage: SubPageActivityHost
     /** 列表状态提升到 Activity 字段，供右摇杆滚动引擎访问（CompatGuideScreen 内 listState 由此传入）。 */
     private lateinit var listState: LazyListState
-    /** 右摇杆滚动后引擎回写的首个可视项索引（焦点跟随桥梁）。 */
-    private val rightStickFirstVisible = kotlinx.coroutines.flow.MutableStateFlow(-1)
-    /** 左摇杆 / Hat 导航事件桥梁：SubPageGamepad.onNavigate 推入，SubPageScaffold 订阅驱动焦点。 */
-    private val navFlow = MutableSharedFlow<Direction>(extraBufferCapacity = 16)
     /** 兼容向导设置仓库（供 SAF 授权结果回调标记完成）。 */
     private lateinit var settings: SettingsRepository
     /** 截图文件夹持久化存储（判定"已授权"状态）。 */
@@ -91,19 +91,12 @@ class CompatGuideActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         listState = LazyListState()
-        subPageGamepad = SubPageGamepadHost(
-            lifecycleScope,
+        subPage = SubPageActivityHost(
+            activity = this,
             getState = { listState },
-            getFirstVisibleItemIndex = { listState.firstVisibleItemIndex },
-            onFocusSync = { rightStickFirstVisible.value = it },
-            onNavigate = { dir -> navFlow.tryEmit(dir) }
+            getFirstVisibleItemIndex = { listState.firstVisibleItemIndex }
         )
-        subPageGamepad.start()
-        // 沉浸式 + 边缘到边缘（统一预测性返回手势窗口配置）
-        setupEdgeToEdgeImmersive(hideStatusBar = false)
-        // 预测返回手势（minSdk=36 恒生效）：注册回调，用户从屏幕左/右边缘向内滑动时系统
-        // 绘制预测动画，松手后此处执行关闭，兼容向导支持系统级返回退出。
-        enablePredictiveBack { finish() }
+        subPage.start()
 
         settings = SettingsRepository(this)
         // 截图文件夹授权（SAF ACTION_OPEN_DOCUMENT_TREE）：用户选定后持久化 URI 并标记完成。
@@ -122,14 +115,14 @@ class CompatGuideActivity : ComponentActivity() {
         setContent {
             // 跟随设置-主题切换（深色/浅色/AMOLED），使用 LandscapeTheme 统一主题
             LandscapeTheme(settings = settings) {
-                val rsFocus = rightStickFirstVisible.collectAsState()
+                val rsFocus = subPage.rightStickFirstVisible.collectAsState()
                 CompatGuideScreen(
                     context = this,
                     settings = settings,
                     onClose = { finish() },
                     listState = listState,
                     rightStickFirstVisible = rsFocus,
-                    navigate = navFlow,
+                    navigate = subPage.navFlow,
                     screenshotStore = screenshotStore,
                     onRequestScreenshot = { treeLauncher.launch(null) }
                 )
@@ -140,12 +133,23 @@ class CompatGuideActivity : ComponentActivity() {
     }
 
     /** 右摇杆滚动：MotionEvent 轴委托给引擎；其余交系统。 */
-    override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean {
-        return if (subPageGamepad.dispatchMotionEvent(event)) true else super.onGenericMotionEvent(event)
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        markInputModeGamepad(event)
+        return if (subPage.dispatchMotionEvent(event)) true else super.onGenericMotionEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        markInputModeGamepad(event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        markInputModeTouch(ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
-        subPageGamepad.stop()
+        subPage.stop()
         super.onDestroy()
     }
 }
@@ -164,13 +168,7 @@ private fun CompatGuideScreen(
     /** 触发截图文件夹 SAF 授权。 */
     onRequestScreenshot: () -> Unit
 ) {
-    val owner = LocalLifecycleOwner.current
-    var refresh by remember { mutableStateOf(0) }
-    DisposableEffect(owner) {
-        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) refresh++ }
-        owner.lifecycle.addObserver(obs)
-        onDispose { owner.lifecycle.removeObserver(obs) }
-    }
+    var refresh by rememberRefreshOnResume()
 
     val isColorOS = ColorOSCompat.isColorOS()
     // listState 由 Activity 提升到字段，供右摇杆滚动引擎驱动（与 About / Licenses 一致）。
@@ -266,7 +264,7 @@ private fun CompatGuideScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .clip(RoundedCornerShape(Dimens.RadiusXs))
                 )
                 if (!isColorOS) {
                     Spacer(Modifier.height(Dimens.xs))

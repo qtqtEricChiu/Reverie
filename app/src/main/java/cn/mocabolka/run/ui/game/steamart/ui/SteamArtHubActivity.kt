@@ -59,12 +59,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import kotlin.math.roundToInt
-import cn.mocabolka.run.ui.enablePredictiveBack
+
 import cn.mocabolka.run.ui.game.GameArt
 import cn.mocabolka.run.ui.game.GameArtResolver
 import cn.mocabolka.run.ui.game.GameArtTombstone
 import cn.mocabolka.run.ui.game.clearArtCachesForPackage
+import cn.mocabolka.run.ui.game.ArtChangeBus
 import cn.mocabolka.run.ui.game.steamart.domain.model.LogoPosition
 import cn.mocabolka.run.gamepad.GamepadDetector
 import cn.mocabolka.run.ui.game.extractAccent
@@ -74,15 +77,19 @@ import cn.mocabolka.run.ui.components.ReverieIconButton
 import cn.mocabolka.run.ui.components.SubPageSpec
 import cn.mocabolka.run.ui.components.SubPageTitleBar
 import cn.mocabolka.run.ui.components.subPageKeyHandler
-import cn.mocabolka.run.ui.setupEdgeToEdgeImmersive
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
+import cn.mocabolka.run.ui.theme.LightContent
+import cn.mocabolka.run.ui.theme.resolvePageTheme
+import cn.mocabolka.run.ui.DarkMode
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.foundation.ScrollState
 import androidx.lifecycle.lifecycleScope
 import cn.mocabolka.run.gamepad.Direction
-import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import cn.mocabolka.run.gamepad.SubPageActivityHost
+import cn.mocabolka.run.gamepad.markInputModeGamepad
+import cn.mocabolka.run.gamepad.markInputModeTouch
 import cn.mocabolka.run.ui.theme.focusBorder
 import kotlinx.coroutines.flow.MutableSharedFlow
 import cn.mocabolka.run.ui.theme.edgeSafePadding
@@ -98,14 +105,21 @@ class SteamArtHubActivity : ComponentActivity() {
     private lateinit var childLauncher: ActivityResultLauncher<Intent>
     /** 自定义主题返回后是否需通知游戏页重载美术（仅记录，不级联关掉本二级页）。 */
     private val pendingRefreshState = mutableStateOf(false)
+    /**
+     * 「已应用自定义主题」提示专用计数：仅自定义主题子页回传 RESULT_OK（真有改动）时 +1。
+     * 修复：原以 pendingRefreshState 布尔 false→true 沿触发 toast，同一 Hub 会话第二次从
+     * 自定义页返回时值不再变化 → 不弹提示；且不能复用 hubReloadKey（清除按钮/ArtChangeBus
+     * 也会自增，会误弹「已应用」）。
+     */
+    private val customAppliedTick = mutableStateOf(0)
     /** 二级页就地刷新信号：自定义主题返回后 +1，驱动 Hub 重新加载并展示新美术（给刷新喘息时间）。 */
     private val hubReloadKey = mutableStateOf(0)
     /** 最近一次拉起的子页是否为自定义主题（决定返回时是否级联回游戏页）。 */
     private var lastChildWasCustom = false
     /** 美术资源 Hub 页专属滚动状态（右摇杆滚动 + 焦点跟随底座，提升到字段以复用同一实例）。 */
     private val scrollState = ScrollState(0)
-    /** 右摇杆 / 左摇杆 焦点导航桥接流（SubPageGamepad → Compose 焦点状态机）。 */
-    private val navFlow = MutableSharedFlow<Direction>()
+    /** 子页面右摇杆滚动 + 左摇杆/Hat 导航引擎（与 SubPageScaffold 同构，统一托管）。 */
+    private lateinit var subPage: SubPageActivityHost
     /** 美术资源 Hub 页焦点总数（与 Composable 内 totalSlots 保持一致）。 */
     private val hubTotalSlots = 10
     /** 各槽位测量时的窗口绝对 y / 高度 / 当时滚动偏移，由 Compose onGloballyPositioned 写入；
@@ -120,13 +134,10 @@ class SteamArtHubActivity : ComponentActivity() {
     private val hubViewportH = mutableStateOf<Int?>(null)
     /** 逻辑焦点索引（提升到 Activity 字段，供右摇杆焦点同步回调直接写入，与 SubPageScaffold 同构）。 */
     private val focusIndex = mutableStateOf(0)
-    /** 子页面右摇杆滚动 + 左摇杆/Hat 导航引擎（与 SubPageScaffold 同构）。 */
-    private var subPageGamepad: SubPageGamepadHost? = null
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setupEdgeToEdgeImmersive(hideStatusBar = false)
-        enablePredictiveBack { if (pendingRefreshState.value) setResult(RESULT_OK); finish() }
 
         // SEC-S1：包名净化——pkg 将拼入 filesDir 路径，非法包名（路径穿越等）直接拒绝进入
         val pkg = SteamArtContracts.sanitizePackage(intent.getStringExtra(SteamArtContracts.EXTRA_PACKAGE))
@@ -134,6 +145,8 @@ class SteamArtHubActivity : ComponentActivity() {
         val label = intent.getStringExtra(SteamArtContracts.EXTRA_LABEL).takeIf { !it.isNullOrBlank() } ?: pkg
         val accentHex = intent.getStringExtra(SteamArtContracts.EXTRA_ACCENT)
         val inheritedAccent = accentHex?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+        // 父级（游戏页）确认存在整页背景图：本地美术尚未落盘时也强制深色，避免浅色闪烁
+        val hasPageBgFromParent = intent.getBooleanExtra(SteamArtContracts.EXTRA_HAS_PAGE_BG, false)
 
         childLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
             if (res.resultCode == RESULT_OK) {
@@ -143,6 +156,7 @@ class SteamArtHubActivity : ComponentActivity() {
                     // 并记录待刷新标记，待用户从本页返回时再通知游戏页重载美术。
                     pendingRefreshState.value = true
                     hubReloadKey.value++
+                    customAppliedTick.value++
                 } else {
                     // 提取完成：保持原行为，级联回到游戏页并重载美术。
                     setResult(RESULT_OK)
@@ -158,19 +172,36 @@ class SteamArtHubActivity : ComponentActivity() {
             val ctx = LocalContext.current
             // remember 缓存 Flow，避免每次重组重新注册广播接收器
             val gamepadFlow = remember(ctx) { GamepadDetector.gamepadConnectedFlow(ctx) }
+            // 美术在 Activity 顶层加载，使主题判定可实时跟随「当前是否有整页背景图（page_bg_raw / hero 等回归）」
+            var art by remember(pkg, label) { mutableStateOf<GameArt?>(null) }
+            LaunchedEffect(pkg, label, hubReloadKey.value) { art = GameArtResolver(ctx).load(pkg, label) }
+            // 订阅美术变更总线：美术被新建/更换/清除时本页立即重算主题（与背后的游戏页同步）
+            LaunchedEffect(Unit) {
+                ArtChangeBus.changes.filter { it == pkg }.collect { hubReloadKey.value++ }
+            }
+            // 实时判定：有整页背景图 → 深色 + 反白部件；无任何背景图 → 跟随设置（白底正常，此时确实没有美术资源）。
+            // 父页确认有 page_bg_raw 时，本地美术尚未落盘也强制深色，避免浅色闪烁。
+            val hasArtEffective = art?.background != null || (art == null && hasPageBgFromParent)
+            val theme = resolvePageTheme(hasArtEffective, settings)
             LandscapeTheme(
+                darkTheme = theme.darkTheme,
                 useMonet = settings.useMonet,
-                gamepadConnected = gamepadFlow.collectAsState(false).value
+                isAmoled = settings.darkMode == DarkMode.AMOLED,
+                gamepadConnected = gamepadFlow.collectAsState(false).value,
+                glassSurface = settings.glassSurfaceFlow.collectAsState().value
             ) {
+                LightContent(lightContent = theme.lightContent) {
                 SteamArtHubScreen(
                     cutoutAdapt = cutoutAdapt,
+                    themedNoArtFallback = theme.themedNoArtFallback,
+                    art = art,
                     pkg = pkg,
                     label = label,
                     inheritedAccent = inheritedAccent,
                     reloadKey = hubReloadKey,
-                    pendingRefresh = pendingRefreshState,
+                    appliedTick = customAppliedTick,
                     scrollState = scrollState,
-                    navFlow = navFlow,
+                    navFlow = subPage.navFlow,
                     focusIndex = focusIndex,
                     slotTop = hubSlotTop,
                     slotH = hubSlotH,
@@ -188,6 +219,8 @@ class SteamArtHubActivity : ComponentActivity() {
                             else putExtra(SteamArtContracts.EXTRA_QUERY, query.orEmpty())
                             if (logoPositionJson != null) putExtra(SteamArtContracts.EXTRA_LOGO_POSITION, logoPositionJson)
                             putExtra(SteamArtContracts.EXTRA_ACCENT, accentHex)
+                            // 转发父页确认的背景图标记：让子页（提取/自定义）在美术落盘前也强制深色
+                            putExtra(SteamArtContracts.EXTRA_HAS_PAGE_BG, hasPageBgFromParent)
                         }
                         childLauncher.launch(i)
                     },
@@ -197,16 +230,19 @@ class SteamArtHubActivity : ComponentActivity() {
                             putExtra(SteamArtContracts.EXTRA_PACKAGE, pkg)
                             putExtra(SteamArtContracts.EXTRA_LABEL, label)
                             putExtra(SteamArtContracts.EXTRA_ACCENT, accentHex)
+                            // 转发父页确认的背景图标记：让子页（提取/自定义）在美术落盘前也强制深色
+                            putExtra(SteamArtContracts.EXTRA_HAS_PAGE_BG, hasPageBgFromParent)
                         }
                         childLauncher.launch(i)
                     }
                 )
+                }
             }
         }
 
         // 右摇杆滚动 + 左摇杆/Hat 焦点导航（与 SubPageScaffold 同构）。
-        subPageGamepad = SubPageGamepadHost(
-            scope = lifecycleScope,
+        subPage = SubPageActivityHost(
+            activity = this,
             getState = { scrollState },
             getFirstVisibleItemIndex = {
                 val ct = hubContentTop.value
@@ -231,20 +267,40 @@ class SteamArtHubActivity : ComponentActivity() {
                     if (best < 0) focusIndex.value else best
                 }
             },
-            onFocusSync = { idx -> if (idx >= 0) focusIndex.value = idx },
-            onNavigate = { dir -> lifecycleScope.launch { navFlow.emit(dir) } }
+            customOnFocusSync = { idx -> if (idx >= 0) focusIndex.value = idx },
+            customOnNavigate = { dir -> lifecycleScope.launch { subPage.navFlow.emit(dir) } },
+            navFlowCapacity = 0
         )
-        subPageGamepad?.start()
+        subPage.start()
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (subPageGamepad?.dispatchMotionEvent(event) == true) return true
+        markInputModeGamepad(event)
+        if (subPage.dispatchMotionEvent(event) == true) return true
         return super.onGenericMotionEvent(event)
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        markInputModeGamepad(event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        markInputModeTouch(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // 系统预测返回（不注册 OnBackInvokedCallback）由系统绘制预览动画并默认 finish；
+        // 若本次退出需刷新游戏页（pendingRefreshState），在此补 setResult(RESULT_OK)，等效原回调逻辑。
+        if (pendingRefreshState.value && isFinishing) {
+            setResult(RESULT_OK)
+        }
+    }
+
     override fun onDestroy() {
-        subPageGamepad?.stop()
-        subPageGamepad = null
+        subPage.stop()
         super.onDestroy()
     }
 }
@@ -263,13 +319,15 @@ private val PRESETS = listOf(
 @Composable
 private fun SteamArtHubScreen(
     cutoutAdapt: Boolean = false,
+    themedNoArtFallback: Boolean = false,
+    art: GameArt? = null,
     pkg: String,
     label: String,
     inheritedAccent: androidx.compose.ui.graphics.Color? = null,
     /** 二级页就地刷新信号（自定义主题返回后由 Activity +1），驱动 Hub 重新加载并展示新美术。 */
     reloadKey: MutableState<Int>,
-    /** 自定义主题是否已落地待回游戏页刷新（自定义返回时由 Activity 置 true），用于弹出「已应用」提示。 */
-    pendingRefresh: State<Boolean>,
+    /** 「已应用自定义主题」提示计数（自定义子页真有改动返回时由 Activity +1），每次自增都重新弹提示。 */
+    appliedTick: State<Int>,
     onBack: () -> Unit,
     onExtract: (appId: Long?, query: String?, logoPositionJson: String?) -> Unit,
     onCustom: () -> Unit,
@@ -293,15 +351,12 @@ private fun SteamArtHubScreen(
 ) {
     val ctx = LocalContext.current
     val primary = MaterialTheme.colorScheme.primary
-    var art by remember(pkg, label) { mutableStateOf<GameArt?>(null) }
-    // 清除美术资源 / 自定义主题返回后通过 reloadKey 触发重新加载，刷新 hasArt 与界面显示
-    LaunchedEffect(pkg, label, reloadKey.value) { art = GameArtResolver(ctx).load(pkg, label) }
     // 应用成功提示：项目标准 ReverieToast（in-app 浮层），替代系统默认 Toast。
-    // 自定义主题返回（pendingRefresh 由 false→true）时弹出，作为「刷新喘息时间」的可见反馈。
+    // 自定义主题真有改动返回（appliedTick 自增）时弹出，同一会话多次进出每次都会重新提示。
     var toastMsg by remember { mutableStateOf<String?>(null) }
     var toastKey by remember { mutableStateOf(0) }
     LaunchedEffect(toastKey) { if (toastMsg != null) { delay(2500); toastMsg = null } }
-    LaunchedEffect(pendingRefresh.value) { if (pendingRefresh.value) { toastMsg = "已应用自定义主题"; toastKey++ } }
+    LaunchedEffect(appliedTick.value) { if (appliedTick.value > 0) { toastMsg = "已应用自定义主题"; toastKey++ } }
     val sources = remember(art) {
         art?.let {
             listOfNotNull(it.background, it.hero, it.logo, it.capsule, it.header).map { s -> s.source }
@@ -411,7 +466,7 @@ private fun SteamArtHubScreen(
                 }
             }
     ) {
-        GameArtBackground(art, accent)
+        GameArtBackground(art, accent, themedNoArtFallback = themedNoArtFallback)
     Column(
         Modifier.fillMaxSize()
             .statusBarSafeTop()
@@ -429,7 +484,7 @@ private fun SteamArtHubScreen(
                 onBack = onBack,
                 isBackFocused = focusIndex.value == 0,
                 onBackFocus = { focusIndex.value = 0 },
-                contentColor = Color.White,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.fillMaxWidth(),
                 titleStyle = if (wide) MaterialTheme.typography.titleLarge
                              else MaterialTheme.typography.titleMedium
@@ -454,7 +509,7 @@ private fun SteamArtHubScreen(
                     androidx.compose.material3.Text(
                         "SteamDB 自动提取",
                         style = MaterialTheme.typography.titleSmall,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.height(Dimens.sm))
                     OutlinedTextField(
@@ -466,8 +521,8 @@ private fun SteamArtHubScreen(
                             .then(track(1)),
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             focusedContainerColor = SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Default),
                             unfocusedContainerColor = SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Default),
                             focusedLabelColor = accent,
@@ -490,8 +545,8 @@ private fun SteamArtHubScreen(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         colors = TextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             focusedContainerColor = SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Default),
                             unfocusedContainerColor = SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Default),
                             focusedLabelColor = accent,
@@ -552,13 +607,13 @@ private fun SteamArtHubScreen(
                     androidx.compose.material3.Text(
                         "自定义主题",
                         style = MaterialTheme.typography.titleSmall,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.height(Dimens.sm))
                     androidx.compose.material3.Text(
                         "手动设定主色、背景图与 Logo 位置/尺寸，或选图拼贴专属主题。",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.8f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                     )
                     Spacer(Modifier.height(Dimens.md))
                     ReverieFilledButton(
@@ -621,6 +676,8 @@ fun ClearArtButton(
                 GameArtTombstone.mark(ctx, pkg)
                 // ③ 清进程内位图/取色缓存，杜绝残留旧图
                 clearArtCachesForPackage(pkg)
+                // 广播美术变更，令所有游戏页及子页立即重算主题（含背后的游戏页一级页）
+                ArtChangeBus.notify(pkg)
                 // 界面刷新必须在主线程回调
                 withContext(Dispatchers.Main) { onCleared() }
             }

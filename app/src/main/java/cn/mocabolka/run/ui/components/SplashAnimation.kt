@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.mocabolka.run.R
+import cn.mocabolka.run.ui.theme.Dimens
 
 /**
  * 全屏沉浸式开屏动画：覆盖状态栏与挖孔区，Logo 呼吸光晕 + 脉冲缩放 + 三圆点 loading 动画。
@@ -217,7 +218,7 @@ private fun SplashAnimContent() {
         ) {
             val dotMod = Modifier
                 .size(8.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(Dimens.RadiusXs))
             Box(modifier = dotMod.graphicsLayer { alpha = dot1Alpha }
                 .background(MaterialTheme.colorScheme.primary))
             Box(modifier = dotMod.graphicsLayer { alpha = dot2Alpha }

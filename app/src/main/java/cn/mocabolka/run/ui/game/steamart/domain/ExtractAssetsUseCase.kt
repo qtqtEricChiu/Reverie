@@ -313,6 +313,8 @@ class ExtractAssetsUseCase(
                 runCatching { org.json.JSONObject(metaFile.readText()) }.getOrElse { org.json.JSONObject() }
             else org.json.JSONObject()
             obj.put("logoPosition", logoJson)
+            // 提取即视为 SteamDB 来源：清掉可能残留的「自定义」标记，避免回退为自定义自动取色逻辑。
+            obj.put("custom", false)
             metaFile.writeText(obj.toString())
         } catch (_: Exception) {
             Log.w(TAG, "写入 logoPosition meta 失败")

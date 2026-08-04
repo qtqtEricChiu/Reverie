@@ -16,6 +16,8 @@ object SteamArtContracts {
     const val EXTRA_LOGO_POSITION = "steamart.extra.LOGO_POSITION"
     /** 游戏页已计算并继承的主色（#AARRGGBB），子页面无美术资源时回退此色而非全局默认色。 */
     const val EXTRA_ACCENT = "steamart.extra.ACCENT"
+    /** 父级（游戏页）确认存在整页背景图（page_bg_raw / hero 已落盘或回归），子页面据此在美术尚未落盘时也强制深色，避免浅色闪烁。 */
+    const val EXTRA_HAS_PAGE_BG = "steamart.extra.HAS_PAGE_BG"
 
     /** Android 包名合法形态：字母开头的点分段，禁止路径分隔符/相对段。 */
     private val PACKAGE_REGEX = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")

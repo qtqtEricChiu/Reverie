@@ -30,7 +30,7 @@ fun Modifier.edgeSafePadding(cutoutAdapt: Boolean = false): Modifier {
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val ltr = LayoutDirection.Ltr
-    val isLandscape = configuration.screenWidthDp >= configuration.screenHeightDp
+    val isLandscape = configuration.deviceProfile.isLandscape
     val cutout = WindowInsets.displayCutout
     val safePx = with(density) { Dimens.waterfallSafe.roundToPx() }
     return if (isLandscape) {

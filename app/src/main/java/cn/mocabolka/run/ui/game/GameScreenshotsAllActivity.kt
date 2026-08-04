@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.Dp
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -73,12 +74,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import cn.mocabolka.run.gamepad.Direction
-import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import cn.mocabolka.run.gamepad.SubPageActivityHost
+import cn.mocabolka.run.gamepad.markInputModeGamepad
+import cn.mocabolka.run.gamepad.markInputModeTouch
 import cn.mocabolka.run.ui.components.GamepadBottomHintBar
 import cn.mocabolka.run.ui.components.Hint
 import cn.mocabolka.run.ui.components.HintGap
 import cn.mocabolka.run.ui.components.KeyToken
-import cn.mocabolka.run.ui.enablePredictiveBack
+
 import cn.mocabolka.run.ui.setupEdgeToEdgeImmersive
 import cn.mocabolka.run.ui.game.GameArt
 import cn.mocabolka.run.ui.game.GameArtImage
@@ -91,11 +94,15 @@ import cn.mocabolka.run.ui.game.rememberArtBitmap
 import cn.mocabolka.run.ui.game.rememberShotBitmap
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.MotionSpec
+import cn.mocabolka.run.ui.theme.rememberStaggeredEntrance
 import cn.mocabolka.run.ui.theme.MotionMachines
 import cn.mocabolka.run.ui.Haptics
 import cn.mocabolka.run.ui.SettingsRepository
+import cn.mocabolka.run.ui.DarkMode
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
+import cn.mocabolka.run.ui.theme.resolvePageTheme
+import cn.mocabolka.run.ui.theme.LightContent
 import cn.mocabolka.run.ui.theme.edgeSafePadding
 import cn.mocabolka.run.ui.theme.focusBorder
 import cn.mocabolka.run.ui.components.SubPageSpec
@@ -104,6 +111,8 @@ import cn.mocabolka.run.ui.components.subPageKeyHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
 /**
@@ -137,12 +146,10 @@ class GameScreenshotsAllActivity : ComponentActivity() {
     private val columns = mutableStateOf(3)
     /** 缩略图总数（由 composable 写入），焦点越界钳制与 A 打开取值时使用。 */
     private val shotCount = mutableStateOf(0)
-    /** 右摇杆滚动后引擎回写的"首个可视项索引"（焦点跟随桥梁）。 */
-    private val rightStickFirstVisible = MutableStateFlow(-1)
-    /** 左摇杆 / Hat 导航事件桥梁：SubPageGamepad.onNavigate 推入，composable 订阅驱动焦点。 */
-    private val navFlow = MutableSharedFlow<Direction>(extraBufferCapacity = 16)
-    /** 右摇杆滚动引擎（独立 Activity 不含 HomeScreen 引擎，需自建最小滚动循环）。 */
-    private var subPageGamepad: SubPageGamepadHost? = null
+    /** 右摇杆滚动引擎托管（统一封装 SubPageGamepadHost + navFlow + rightStickFirstVisible）。 */
+    private lateinit var subPage: SubPageActivityHost
+    /** 美术资源（提升到 Activity 级，供外层 LandscapeTheme 按 resolvePageTheme 统一驱动深浅；首帧同步继承 peekGameArt）。 */
+    private val artState = mutableStateOf<GameArt?>(null)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val pkg = intent.getStringExtra(GamePageActivity.EXTRA_PACKAGE)
@@ -152,31 +159,42 @@ class GameScreenshotsAllActivity : ComponentActivity() {
         val label = intent.getStringExtra(SteamArtContracts.EXTRA_LABEL).takeIf { !it.isNullOrBlank() } ?: pkg
         val accentHex = intent.getStringExtra(SteamArtContracts.EXTRA_ACCENT)
         val inheritedAccent = accentHex?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+        // 父级（游戏页）确认存在整页背景图：本地美术尚未落盘时也强制深色，避免浅色闪烁
+        val hasPageBgFromParent = intent.getBooleanExtra(SteamArtContracts.EXTRA_HAS_PAGE_BG, false)
 
         // 右摇杆滚动：提前创建网格状态并交给引擎，setContent 内复用同一实例。
-        subPageGamepad = SubPageGamepadHost(
-            lifecycleScope,
+        subPage = SubPageActivityHost(
+            activity = this,
             getState = { gridState },
-            getFirstVisibleItemIndex = { gridState.firstVisibleItemIndex },
-            onFocusSync = { rightStickFirstVisible.value = it },
-            onNavigate = { dir -> navFlow.tryEmit(dir) }
+            getFirstVisibleItemIndex = { gridState.firstVisibleItemIndex }
         )
-        subPageGamepad?.start()
-        // 沉浸式 + 边缘到边缘
-        setupEdgeToEdgeImmersive(hideStatusBar = false)
-        enableEdgeToEdge()
-        // 预测返回手势：从边缘滑动返回父级游戏子页面
-        enablePredictiveBack { finish() }
+        subPage.start()
 
         val settings = SettingsRepository(this@GameScreenshotsAllActivity)
         val cutoutAdapt = settings.cutoutAdapt
+        // 首帧同步继承进程内美术缓存（无 IO），供外层主题判定；未命中在 setContent 内异步补帧
+        artState.value = peekGameArt(pkg)
 
         // 立即全屏渲染（对齐 SteamArtHubActivity）：标题栏 + accent 渐变背景（GameArtBackground 在 art=null 时的回退）
         // 首帧即正确显示。art 在屏幕内 LaunchedEffect 异步加载，加载到位后背景自动从 accent 渐变升级为模糊底图。
         // 截图瀑布流内容（shots）扫描亦异步，属允许的缓加载。
         setContent {
-            LandscapeTheme(settings = settings) {
+            val art by artState
+            // 统一主题判定（2026-07-29）：有美术→强制深色反白；无美术→跟随设置。
+            // 父页确认有 page_bg_raw 时，本地美术尚未落盘也强制深色，避免浅色闪烁。
+            val hasArtEffective = art?.background != null || (art == null && hasPageBgFromParent)
+            val theme = resolvePageTheme(hasArtEffective, settings)
+            LandscapeTheme(
+                darkTheme = theme.darkTheme,
+                useMonet = settings.useMonet,
+                isAmoled = settings.darkMode == DarkMode.AMOLED,
+                gamepadConnected = false,
+                glassSurface = settings.glassSurfaceFlow.collectAsState().value
+            ) {
+                LightContent(lightContent = theme.lightContent) {
                 GameScreenshotsAllScreen(
+                    art = art,
+                    themedNoArtFallback = theme.themedNoArtFallback,
                     pkg = pkg,
                     label = label,
                     inheritedAccent = inheritedAccent,
@@ -186,29 +204,52 @@ class GameScreenshotsAllActivity : ComponentActivity() {
                     columns = columns,
                     shotCount = shotCount,
                     gridState = gridState,
-                    rightStickFirstVisible = rightStickFirstVisible,
-                    navFlow = navFlow,
+                    rightStickFirstVisible = subPage.rightStickFirstVisible,
+                    navFlow = subPage.navFlow,
                     onClose = { finish() },
                     onOpenShot = { shot -> GameScreenshots.open(this, shot) }
                 )
+                }
+            }
+            // 美术资源：首帧继承进程内缓存（peekGameArt，见 Screen 说明）；并订阅美术变更总线，
+            // 在美术被新建/更换/清除后立即重读并重算主题（消除「刷新不及时」）。
+            LaunchedEffect(pkg, label) {
+                if (artState.value == null) artState.value = GameArtResolver(this@GameScreenshotsAllActivity).load(pkg, label)
+            }
+            LaunchedEffect(Unit) {
+                ArtChangeBus.changes.filter { it == pkg }.collect {
+                    artState.value = GameArtResolver(this@GameScreenshotsAllActivity).load(pkg, label)
+                }
             }
         }
     }
 
     /** 右摇杆滚动：MotionEvent 轴委托给引擎；其余交系统。 */
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        return if (subPageGamepad?.dispatchMotionEvent(event) == true) true else super.onGenericMotionEvent(event)
+        markInputModeGamepad(event)
+        return if (subPage.dispatchMotionEvent(event)) true else super.onGenericMotionEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        markInputModeGamepad(event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        markInputModeTouch(ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
-        subPageGamepad?.stop()
-        subPageGamepad = null
+        subPage.stop()
         super.onDestroy()
     }
 }
 
 @Composable
 private fun GameScreenshotsAllScreen(
+    art: GameArt?,
+    themedNoArtFallback: Boolean,
     pkg: String,
     /** 标题：来自 Intent 透传（SteamArtContracts.EXTRA_LABEL），首帧即正确，与 SteamArt 美术二级页同构。 */
     label: String,
@@ -237,10 +278,7 @@ private fun GameScreenshotsAllScreen(
     //    说明：标题栏 / 瀑布流等前景不依赖 art，首帧即渲染（由 subPageEnter 整页渐入），不再以 art
     //    解析作为闸门——[SubPageTitleBar]+[statusBarSafeTop] 已正确处理状态栏避让，原 ready 闸门只会
     //    让标题栏在缓存未命中时硬切出现（≤800ms 视觉跳变）。
-    var art by remember(pkg, label) { mutableStateOf(peekGameArt(pkg)) }
-    LaunchedEffect(pkg, label) {
-        if (art == null) art = GameArtResolver(context).load(pkg, label)
-    }
+    // 注：art / themedNoArtFallback 已由 Activity 层按 resolvePageTheme 统一判定并透传，本页不再自行解析。
 
     // ── 强调色：首帧即采用 inheritedAccent；缺失时在 art 加载到位后用 extractAccent 推导 ──
     val accentSources = remember(art) {
@@ -368,7 +406,7 @@ private fun GameScreenshotsAllScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             // ── 背景层（4 层渲染，统一复用 GameArtBackground；art=null 时回退 accent 渐变，非纯色）──
-            GameArtBackground(art = art, accent = accent)
+            GameArtBackground(art = art, accent = accent, themedNoArtFallback = themedNoArtFallback)
             // ── 前景（标题栏 + 全部内容）：首帧即渲染，无需等待 art ──
             Column(
                 Modifier.fillMaxSize()
@@ -381,7 +419,7 @@ private fun GameScreenshotsAllScreen(
                 SubPageTitleBar(
                     title = label,
                     onBack = onClose,
-                    contentColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.fillMaxWidth(),
                     titleStyle = if (wide) MaterialTheme.typography.titleLarge
                                  else MaterialTheme.typography.titleMedium
@@ -533,7 +571,8 @@ private fun GameScreenshotsAllHeader(
                 Text(
                     name,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
+                    // 背景为 accent 0.18f 透明底（主色为页面表面色），文字须随主题深浅：浅色主题黑字、深色页白字
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = Dimens.md)
@@ -576,27 +615,17 @@ private fun ScreenshotWaterfallTile(
     // 注意：槽位高度始终预留（不依赖加载完成），故不再以「就绪」作为入场门槛，
     // 加载中的项以占位框先入场、位图解码完成后无缝替换为真实图。
     val shouldAppear = isInViewport || focused
-    var appeared by remember(entranceKey, shot.uri) { mutableStateOf(false) }
-    LaunchedEffect(entranceKey, shot.uri, shouldAppear) {
-        if (!shouldAppear) { appeared = false; return@LaunchedEffect }
-        if (appeared) return@LaunchedEffect // 已浮现且仍满足条件（如仅滚动停止），不重放
-        // 快速滚动（isScrollInProgress）时立即到位，不等待错峰延迟；此处仅读取值、不作为依赖。
-        if (skipEntrance) { appeared = true; return@LaunchedEffect }
-        appeared = false
-        val d = MotionSpec.staggerDelay(entranceIndex, perMs = 8, maxMs = 160)
-        if (d > 0) delay(d)
-        appeared = true
-    }
-
-    val entAlpha by animateFloatAsState(
-        targetValue = if (appeared) 1f else 0f,
-        animationSpec = MotionSpec.Fast,
-        label = "shotAlpha"
-    )
-    val entY by animateFloatAsState(
-        targetValue = if (appeared) 0f else 12f,
-        animationSpec = MotionSpec.Fast,
-        label = "shotY"
+    val (entAlpha, entY) = rememberStaggeredEntrance(
+        entranceIndex = entranceIndex,
+        entranceKey = entranceKey,
+        reduceMotion = false,
+        skipEntrance = skipEntrance,
+        shouldAppear = shouldAppear,
+        effectKeys = arrayOf(entranceKey, shot.uri),
+        initialAppeared = false,
+        perMs = 8,
+        maxMs = 160,
+        startOffsetY = 12f
     )
     Box(
         Modifier
@@ -640,7 +669,8 @@ private fun ScreenshotWaterfallTile(
                     .background(accent.copy(alpha = 0.85f), RoundedCornerShape(Dimens.RadiusXs))
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
-                Text("视频", style = MaterialTheme.typography.labelSmall, color = Color.White)
+                // solid accent 背景（0.85f）→ 用 onAccent 取对比色：浅色 accent 返回黑字、深色 accent 返回白字，均可读
+                Text("视频", style = MaterialTheme.typography.labelSmall, color = GamePageColors.onAccent(accent))
             }
         }
         BottomFadeMask(

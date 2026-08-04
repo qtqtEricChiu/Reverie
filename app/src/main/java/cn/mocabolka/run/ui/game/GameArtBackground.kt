@@ -6,14 +6,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
+import cn.mocabolka.run.ui.theme.LocalAmoledPureBlack
 
 /**
  * 游戏美术 4 层背景（与游戏页完全一致）：
@@ -31,9 +34,35 @@ fun GameArtBackground(
     accent: Color,
     modifier: Modifier = Modifier,
     /** 预载背景 bitmap（切游戏时由 Activity 同步注入），命中则直接采用，跳过异步解码一帧延迟，消解背景硬切。 */
-    preloadedBitmap: ImageBitmap? = null
+    preloadedBitmap: ImageBitmap? = null,
+    /**
+     * 无美术时的主题化回退（游戏页专用，2026-07-28 统一规定）：
+     * true 且无背景图 → 浅色主题用「白色→强调色」竖向渐变、深色/AMOLED 相反（「黑色→强调色」），
+     * 且**不叠任何压暗遮罩**（遮罩只为压暗美术图而存在）；字色由调用方按主题深浅适配。
+     * false（默认，SteamDB 美术各子页 / 截图页沿用）→ 旧行为：accent→纯黑渐变 + 全套压暗层。
+     */
+    themedNoArtFallback: Boolean = false
 ) {
     val bgBmp = preloadedBitmap ?: rememberArtBitmap(art?.background?.source)
+    // AMOLED 纯黑模式：不含美术资源（art == null 且无预载背景）时直接纯黑，
+    // 隐藏全部渐变与压暗浮层。仅作用于无美术场景；有美术页保持原有深色 + 压暗遮罩（铁律不破坏）。
+    if (LocalAmoledPureBlack.current && art == null && bgBmp == null) {
+        Box(modifier.fillMaxSize().background(Color.Black))
+        return
+    }
+    // 主题化回退分支：仅「完全无美术资源」（art == null，与游戏页 lightContent 判定同源）时生效。
+    // 有美术但背景图尚未解码完的一帧仍走旧暗色回退，避免白底闪现与白字冲突。
+    if (themedNoArtFallback && art == null && bgBmp == null) {
+        // 按当前主题实际背景明度判深浅（兼容 AMOLED 纯黑 / 莫奈动态色）。
+        val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+        val base = if (dark) Color.Black else Color.White
+        Box(
+            modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(base, accent))
+            )
+        )
+        return
+    }
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
         if (bgBmp != null) {
             Image(

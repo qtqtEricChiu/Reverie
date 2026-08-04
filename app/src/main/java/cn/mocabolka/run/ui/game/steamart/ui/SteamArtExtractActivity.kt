@@ -4,6 +4,7 @@ import cn.mocabolka.run.ui.components.statusBarSafeTop
 
 import android.content.Intent
 import cn.mocabolka.run.ui.game.GameArtBackground
+import cn.mocabolka.run.ui.game.ArtChangeBus
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebView
@@ -51,7 +52,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.lifecycle.viewmodel.compose.viewModel
-import cn.mocabolka.run.ui.enablePredictiveBack
+
 import cn.mocabolka.run.ui.game.GameArt
 import cn.mocabolka.run.ui.game.GameArtResolver
 import cn.mocabolka.run.gamepad.GamepadDetector
@@ -70,6 +71,9 @@ import cn.mocabolka.run.ui.game.steamart.domain.model.LogoPosition
 import cn.mocabolka.run.ui.setupEdgeToEdgeImmersive
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
+import cn.mocabolka.run.ui.theme.LightContent
+import cn.mocabolka.run.ui.theme.resolvePageTheme
+import cn.mocabolka.run.ui.DarkMode
 import cn.mocabolka.run.ui.theme.edgeSafePadding
 import cn.mocabolka.run.ui.theme.SurfaceCard
 import cn.mocabolka.run.ui.theme.SurfaceTokens
@@ -85,7 +89,6 @@ class SteamArtExtractActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupEdgeToEdgeImmersive(hideStatusBar = false)
-        enablePredictiveBack { finish() }
 
         // SEC-S1：包名净化——pkg 将拼入 filesDir 路径，非法包名（路径穿越等）直接拒绝进入
         val pkg = SteamArtContracts.sanitizePackage(intent.getStringExtra(SteamArtContracts.EXTRA_PACKAGE))
@@ -108,10 +111,16 @@ class SteamArtExtractActivity : ComponentActivity() {
             val ctx = LocalContext.current
             // remember 缓存 Flow，避免每次重组重新注册广播接收器
             val gamepadFlow = remember(ctx) { GamepadDetector.gamepadConnectedFlow(ctx) }
+            // SteamDB WebView 探针页：永久深色（反白部件 + 白字状态栏），无视美术与设置
+            val theme = resolvePageTheme(hasArtOrCustom = false, settings = settings, isSteamDb = true)
             LandscapeTheme(
+                darkTheme = theme.darkTheme,
                 useMonet = settings.useMonet,
-                gamepadConnected = gamepadFlow.collectAsState(false).value
+                isAmoled = settings.darkMode == DarkMode.AMOLED,
+                gamepadConnected = gamepadFlow.collectAsState(false).value,
+                glassSurface = settings.glassSurfaceFlow.collectAsState().value
             ) {
+                LightContent(lightContent = theme.lightContent) {
                 SteamArtExtractScreen(
                     cutoutAdapt = cutoutAdapt,
                     pkg = pkg,
@@ -121,8 +130,9 @@ class SteamArtExtractActivity : ComponentActivity() {
                     logoPositionJson = logoPositionJson,
                     inheritedAccent = inheritedAccent,
                     onBack = { finish() },
-                    onDone = { setResult(RESULT_OK); finish() }
+                    onDone = { ArtChangeBus.notify(pkg); setResult(RESULT_OK); finish() }
                 )
+                }
             }
         }
     }
@@ -286,12 +296,23 @@ private fun SteamArtExtractScreen(
                 // 进入 Downloading 即停 WebView 加载，保留「访问资源后下载其它变慢」的带宽让位。
                 // LoadingPage / WaitingForHuman（含二次 CF 回卷）则保持/恢复轮询，持续扫描真实页面，
                 // CF 过审后自动恢复提取。
+                // 轮询统一收口：探针必须撑到**终态**才停——Done/Error 后任何回探都无意义。
+                // Downloading 阶段必须保留探针：二次 Cloudflare challenge 经常在「下载已开始」期间
+                // 才被触发（页面被 CF 二次覆盖 / /cdn-cgi/ 重定向到 challenge-platform），此时若停探针，
+                // cfChallenge 永远捕获不到、永远不进 WaitingForHuman、横死 Downloading 0/8。
+                //  - Downloading：仅停 WebView 图片加载让出带宽，探针持续扫描。
+                //  - Done / Error：停探针 + 停 WebView，提取彻底收尾。
+                //  - LoadingPage / WaitingForHuman：保持/重启扫描，覆盖 onPageFinished 还没触发的初始边界
+                //    与 CF 回卷刚完成重启扫描两种情形。
+                //  - Extracting：探针自 LoadingPage 起一直在跑，无需重启。
                 LaunchedEffect(state) {
                     when {
-                        state is ExtractionState.Downloading
-                            || state is ExtractionState.Done
+                        state is ExtractionState.Done
                             || state is ExtractionState.Error -> {
                             client.stopPolling()
+                            try { wv.stopLoading() } catch (_: Throwable) {}
+                        }
+                        state is ExtractionState.Downloading -> {
                             try { wv.stopLoading() } catch (_: Throwable) {}
                         }
                         state is ExtractionState.LoadingPage
@@ -314,7 +335,7 @@ private fun SteamArtExtractScreen(
                         ) {
                             Text(
                                 "检测到 Cloudflare 验证页，探针持续扫描中。通过验证后将自动提取；若已通过可手动启动。",
-                                color = Color.White,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.weight(1f)
                             )
                             ReverieFilledButton(
@@ -345,10 +366,10 @@ private fun SteamArtExtractScreen(
             }
         }
 
-        // 顶部渐变遮罩（纯装饰背景）：从上到下 黑→透明，全幅铺满。
+        // 顶部渐变遮罩（纯装饰背景）：从上到下 主题背景色→透明，全幅铺满。
         // 仅作背景、非功能部件：故意【不】响应挖孔屏/瀑布屏安全距离（不加 edgeSafePadding），
         // 也【不】加 clickable/pointerInput —— 触摸会穿透到下方 WebView，绝不影响 Cloudflare 验证点击。
-        // 作用：压暗顶部，让叠在游戏美术上的白色标题/返回键更清晰。仅本 WebView 提取界面使用。
+        // 作用：压出顶部对比区，让叠在游戏美术上的标题/返回键（跟随主题的 onSurface 色）更清晰。仅本 WebView 提取界面使用。
         Box(
             Modifier
                 .align(Alignment.TopStart)
@@ -357,7 +378,7 @@ private fun SteamArtExtractScreen(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.85f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.85f),
                             Color.Transparent
                         )
                     )
@@ -393,7 +414,7 @@ private fun SteamArtExtractScreen(
                     onBack = onBack,
                     isBackFocused = focusIndex.value == 0,
                     onBackFocus = { focusIndex.value = 0 },
-                    contentColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.fillMaxWidth(),
                     titleStyle = if (wide) MaterialTheme.typography.titleLarge
                                  else MaterialTheme.typography.titleMedium
@@ -429,7 +450,7 @@ private fun SteamArtStatusCard(
         is ExtractionState.Downloading -> {
             SurfaceCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(Dimens.md).fillMaxWidth()) {
-                    Text("正在下载资源 ${state.done}/${state.total}", color = Color.White)
+                    Text("正在下载资源 ${state.done}/${state.total}", color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(Dimens.sm))
                     LinearProgressIndicator(
                         progress = { if (state.total > 0) state.done.toFloat() / state.total else 0f },
@@ -448,14 +469,14 @@ private fun SteamArtStatusCard(
                     horizontalArrangement = Arrangement.spacedBy(Dimens.sm)
                 ) {
                     Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = accent)
-                    Text("美术资源已保存，即将返回游戏页。", color = Color.White)
+                    Text("美术资源已保存，即将返回游戏页。", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
         is ExtractionState.Error -> {
             SurfaceCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(Dimens.md).fillMaxWidth()) {
-                    Text("提取未完成：${state.reason}", color = Color.White)
+                    Text("提取未完成：${state.reason}", color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(Dimens.sm))
                     ReverieFilledButton(
                         text = "重试",
@@ -483,7 +504,7 @@ private fun StatusLine(text: String, accent: Color) {
                     .background(accent, CircleShape)
             )
             Spacer(Modifier.width(Dimens.sm))
-            Text(text, color = Color.White)
+            Text(text, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

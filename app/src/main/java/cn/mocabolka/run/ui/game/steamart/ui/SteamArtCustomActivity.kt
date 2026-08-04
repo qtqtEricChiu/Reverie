@@ -4,10 +4,11 @@ import cn.mocabolka.run.ui.components.statusBarSafeTop
 
 import android.app.Activity
 import cn.mocabolka.run.ui.game.GameArtBackground
+import cn.mocabolka.run.ui.theme.DeviceProfile
+import cn.mocabolka.run.ui.theme.deviceProfile
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -45,6 +46,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Rectangle
@@ -85,14 +87,19 @@ import cn.mocabolka.run.ui.components.SubPageSpec
 import cn.mocabolka.run.ui.components.SubPageTitleBar
 import cn.mocabolka.run.ui.components.subPageKeyHandler
 import cn.mocabolka.run.ui.game.ArtSource
+import cn.mocabolka.run.ui.game.GameArt
 import cn.mocabolka.run.ui.game.GameArtResolver
 import cn.mocabolka.run.ui.game.extractAccent
 import cn.mocabolka.run.ui.game.rememberArtBitmap
 import cn.mocabolka.run.ui.game.steamart.ui.SteamArtContracts
-import cn.mocabolka.run.ui.setupEdgeToEdgeImmersive
+import cn.mocabolka.run.ui.game.ArtChangeBus
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
+import cn.mocabolka.run.ui.theme.LightContent
+import cn.mocabolka.run.ui.theme.resolvePageTheme
+import cn.mocabolka.run.ui.DarkMode
 import cn.mocabolka.run.ui.theme.edgeSafePadding
+import cn.mocabolka.run.ui.theme.ReverieToast
 import cn.mocabolka.run.ui.theme.SurfaceCard
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 import android.view.KeyEvent
@@ -100,12 +107,18 @@ import android.view.MotionEvent
 import androidx.compose.foundation.ScrollState
 import androidx.lifecycle.lifecycleScope
 import cn.mocabolka.run.gamepad.Direction
-import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import cn.mocabolka.run.gamepad.SubPageActivityHost
+import cn.mocabolka.run.gamepad.markInputModeGamepad
+import cn.mocabolka.run.gamepad.markInputModeTouch
 import cn.mocabolka.run.ui.theme.focusBorder
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import org.json.JSONObject
 import java.io.File
 
@@ -142,10 +155,15 @@ private fun recommendLogoScale(widthPct: Float, isPhonePortrait: Boolean): Float
 class SteamArtCustomActivity : ComponentActivity() {
     /** 自定义主题页专属滚动状态（右摇杆滚动底座）。 */
     private val scrollState = ScrollState(0)
-    /** 右摇杆 / 左摇杆 焦点导航桥接流。 */
-    private val navFlow = MutableSharedFlow<Direction>()
     /** 自定义主题页焦点总数（与 Composable 内 totalSlots 保持一致）。 */
-    private val customTotalSlots = 26
+    private val customTotalSlots = 27
+    /**
+     * 退出保存兜底回调：由 Compose 侧注册（见 flushAndReport），返回「本次会话是否有改动」。
+     * 系统手势返回不经由 requestExit（本页不注册 OnBackInvokedCallback，预测性返回交给系统），
+     * 故在 [onStop] (isFinishing) 统一补一次 flush：写 meta + ArtChangeBus 广播 + RESULT_OK，
+     * 保证 Hub 页能弹出「已应用自定义主题」提示且背后页面立即刷新（与 SteamArtHubActivity.onStop 同构）。
+     */
+    internal var flushOnExit: (() -> Boolean)? = null
     /** 各槽位测量时的窗口绝对 y / 高度 / 当时滚动偏移，由 Compose onGloballyPositioned 写入；
      *  三者组合可在任意时刻折算出「槽位相对滚动内容的偏移」(与滚动无关，恒定有效)，
      *  供「窗口跟随焦点移动」与「焦点跟随右摇杆滚动」读取（与 SubPageScaffold 同构）。 */
@@ -158,13 +176,16 @@ class SteamArtCustomActivity : ComponentActivity() {
     private val customViewportH = mutableStateOf<Int?>(null)
     /** 逻辑焦点索引（提升到 Activity 字段，供右摇杆焦点同步回调直接写入，与 SubPageScaffold 同构）。 */
     private val focusIndex = mutableStateOf(0)
-    /** 子页右摇杆滚动 + 左摇杆/Hat 导航引擎（与 SubPageScaffold 同构）。 */
-    private var subPageGamepad: SubPageGamepadHost? = null
+    /** 子页右摇杆滚动 + 左摇杆/Hat 导航引擎（统一封装到 SubPageActivityHost）。 */
+    private lateinit var subpage: SubPageActivityHost
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setupEdgeToEdgeImmersive(hideStatusBar = false)
-        // 退出即应用：返回逻辑统一走 Compose BackHandler（见 SteamArtCustomScreen.requestExit），
-        // 写 meta 后立即 finish 回到美术资源二级页，由 Hub 页弹出「已应用自定义主题」提示。
+        // 沉浸式 + 边缘到边缘由 SubPageActivityHost.start() 统一处理（预测性返回由系统默认行为接管，不注册 OnBackInvokedCallback）。
+        // 退出即应用（三条路径全覆盖）：
+        //  1) 手柄 B 键 / 标题栏返回钮 → requestExit（flush + 有改动才 RESULT_OK + finish）；
+        //  2) 系统手势返回 → 系统默认 finish，由 onStop(isFinishing) 兜底 flush + RESULT_OK；
+        //  3) 极端销毁 → flush 幂等（flushed 守卫），不会重复写盘。
+        // 「已应用自定义主题」提示统一由 Hub 页（美术资源二级页）弹出。
 
         // SEC-S1：包名净化——pkg 将拼入 filesDir 路径（含 deleteRecursively），非法包名直接拒绝进入
         val pkg = SteamArtContracts.sanitizePackage(intent.getStringExtra(SteamArtContracts.EXTRA_PACKAGE))
@@ -174,6 +195,8 @@ class SteamArtCustomActivity : ComponentActivity() {
         val accentHex = intent.getStringExtra(SteamArtContracts.EXTRA_ACCENT)
         val inheritedAccent =
             accentHex?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+        // 父级（游戏页 / Hub）确认存在整页背景图：本地美术尚未落盘时也强制深色，避免浅色闪烁
+        val hasPageBgFromParent = intent.getBooleanExtra(SteamArtContracts.EXTRA_HAS_PAGE_BG, false)
 
         val settings = SettingsRepository(this)
         val cutoutAdapt = settings.cutoutAdapt
@@ -182,17 +205,36 @@ class SteamArtCustomActivity : ComponentActivity() {
             val themeCtx = LocalContext.current
             // remember 缓存 Flow，避免每次重组重新注册广播接收器
             val gamepadFlow = remember(themeCtx) { GamepadDetector.gamepadConnectedFlow(themeCtx) }
+            // 美术在 Activity 顶层加载，使主题判定可实时跟随「当前是否有整页背景图（page_bg_raw / hero 等回归）」
+            var art by remember(pkg, label) { mutableStateOf<GameArt?>(null) }
+            LaunchedEffect(pkg, label) { art = GameArtResolver(themeCtx).load(pkg, label) }
+            // 订阅美术变更总线：背后的游戏页/Hub 在美术变更时本页亦立即重算主题
+            LaunchedEffect(Unit) {
+                ArtChangeBus.changes.filter { it == pkg }.collect {
+                    art = GameArtResolver(themeCtx).load(pkg, label)
+                }
+            }
+            // 实时判定：有整页背景图 → 深色 + 反白部件；无任何背景图 → 跟随设置（白底正常，此时确实没有美术资源）
+            // 父页确认有整页背景图（page_bg_raw）时，即便本地美术尚未落盘也强制深色，避免浅色闪烁
+            val hasArtEffective = art?.background != null || (art == null && hasPageBgFromParent)
+            val theme = resolvePageTheme(hasArtEffective, settings)
             LandscapeTheme(
+                darkTheme = theme.darkTheme,
                 useMonet = settings.useMonet,
-                gamepadConnected = gamepadFlow.collectAsState(false).value
+                isAmoled = settings.darkMode == DarkMode.AMOLED,
+                gamepadConnected = gamepadFlow.collectAsState(false).value,
+                glassSurface = settings.glassSurfaceFlow.collectAsState().value
             ) {
+                LightContent(lightContent = theme.lightContent) {
                 SteamArtCustomScreen(
                     cutoutAdapt = cutoutAdapt,
+                    themedNoArtFallback = theme.themedNoArtFallback,
+                    art = art,
                     pkg = pkg,
                     label = label,
                     inheritedAccent = inheritedAccent,
                     scrollState = scrollState,
-                    navFlow = navFlow,
+                    navFlow = subpage.navFlow,
                     focusIndex = focusIndex,
                     slotTop = customSlotTop,
                     slotH = customSlotH,
@@ -200,12 +242,13 @@ class SteamArtCustomActivity : ComponentActivity() {
                     contentTop = customContentTop,
                     viewportH = customViewportH
                 )
+                }
             }
         }
 
         // 右摇杆滚动 + 左摇杆/Hat 焦点导航（与 SubPageScaffold 同构）。
-        subPageGamepad = SubPageGamepadHost(
-            scope = lifecycleScope,
+        subpage = SubPageActivityHost(
+            activity = this,
             getState = { scrollState },
             getFirstVisibleItemIndex = {
                 val ct = customContentTop.value
@@ -230,20 +273,41 @@ class SteamArtCustomActivity : ComponentActivity() {
                     if (best < 0) focusIndex.value else best
                 }
             },
-            onFocusSync = { idx -> if (idx >= 0) focusIndex.value = idx },
-            onNavigate = { dir -> lifecycleScope.launch { navFlow.emit(dir) } }
+            customOnFocusSync = { idx -> if (idx >= 0) focusIndex.value = idx },
+            customOnNavigate = { dir -> lifecycleScope.launch { subpage.navFlow.emit(dir) } },
+            navFlowCapacity = 0
         )
-        subPageGamepad?.start()
+        subpage.start()
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (subPageGamepad?.dispatchMotionEvent(event) == true) return true
+        markInputModeGamepad(event)
+        if (subpage.dispatchMotionEvent(event)) return true
         return super.onGenericMotionEvent(event)
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) markInputModeGamepad(event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        markInputModeTouch(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // 系统手势返回兜底：不经由 requestExit 的退出（预测性返回由系统 finish）在此统一保存并回传。
+        // flushAndReport 幂等（flushed 守卫），requestExit 已 flush 过的场景不会重复写盘。
+        if (isFinishing) {
+            val changed = runCatching { flushOnExit?.invoke() }.getOrNull() ?: false
+            if (changed) setResult(RESULT_OK)
+        }
+    }
+
     override fun onDestroy() {
-        subPageGamepad?.stop()
-        subPageGamepad = null
+        subpage.stop()
         super.onDestroy()
     }
 }
@@ -251,6 +315,8 @@ class SteamArtCustomActivity : ComponentActivity() {
 @Composable
 fun SteamArtCustomScreen(
     cutoutAdapt: Boolean = false,
+    themedNoArtFallback: Boolean = false,
+    art: GameArt? = null,
     pkg: String,
     label: String,
     inheritedAccent: androidx.compose.ui.graphics.Color? = null,
@@ -273,9 +339,6 @@ fun SteamArtCustomScreen(
 ) {
     val ctx = LocalContext.current
     val primary = MaterialTheme.colorScheme.primary
-    // 异步加载美术：原先组合内 runBlocking 会在首帧阻塞主线程（文件 IO），导致进场掉帧
-    var art by remember(pkg, label) { mutableStateOf<cn.mocabolka.run.ui.game.GameArt?>(null) }
-    LaunchedEffect(pkg, label) { art = GameArtResolver(ctx).load(pkg, label) }
     val baseAccent = remember(art, inheritedAccent) {
         inheritedAccent ?: art?.accentColor ?: primary
     }
@@ -309,21 +372,18 @@ fun SteamArtCustomScreen(
     var logoWidthPct by remember { mutableStateOf(0f) }
     var logoHeightPct by remember { mutableStateOf(0f) }
 
-    // 进入时从 meta 读到的「初始值」快照：用于精确判断用户是否真的改过某项
-    // （修复：原先 changed 用 holdCrop.value 真值判断，导致「关掉一个本就开启的开关」被漏判、
-    //  meta 不回写、状态卡在旧值——典型表现就是关掉 logo 贴边后 logo 仍保持裁切放大的样子）。
-    val initialPin = remember { mutableStateOf("BottomLeft") }
-    val initialScale = remember { mutableStateOf(1f) }
-    val initialCrop = remember { mutableStateOf(false) }
-    val initialWidthPct = remember { mutableStateOf(0f) }
-    val initialHeightPct = remember { mutableStateOf(0f) }
+    // 会话级改动标记（dirty）：仅在用户显式操作（选图 / 选色 / 改 logo 位置·尺寸·贴边）时置位。
+    // 取代旧「当前值 vs 初始快照」比对——快照法会把「进入时回显已落盘图片 / 已存主色」误判为改动，
+    // 导致什么都没改退出也回传 RESULT_OK、Hub 弹出虚假的「已应用自定义主题」提示。
+    val dirty = remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
 
-    // 手机竖屏判定：竖屏 + 宽度 < 600dp（对齐 GamePageVariant.CompactPortrait 判定逻辑）。
-    // 仅手机竖屏才根据 Logo 真实尺寸智能推荐初始 scale，横屏/平板竖屏恒推荐 1.0。
+    // 手机竖屏判定（统一委托 DeviceProfile）：仅手机竖屏才根据 Logo 真实尺寸智能推荐初始 scale，
+    // 横屏 / 平板竖屏恒推荐 1.0。
     val config = LocalConfiguration.current
-    val isPhonePortrait = config.screenWidthDp < config.screenHeightDp && config.screenWidthDp < 600
+    val prof = config.deviceProfile
+    val isPhonePortrait = prof.isPortrait && prof.widthDp < DeviceProfile.PHONE_MAX_DP
 
     // 进入时回显：已落盘的自定义图（Uri.fromFile 供预览）+ 已保存的 logo 位置，
     // 让用户看到「当前已应用」的状态，而非每次进入都是空白。
@@ -353,11 +413,6 @@ fun SteamArtCustomScreen(
             recommendLogoScale(it.widthPct, isPhonePortrait)
         }
 
-        initialPin.value = it.pinnedPosition
-        initialCrop.value = it.logoCrop
-        initialWidthPct.value = it.widthPct
-        initialHeightPct.value = it.heightPct
-        initialScale.value = logoScale
     }
     }
 
@@ -372,32 +427,35 @@ fun SteamArtCustomScreen(
         Color(android.graphics.Color.parseColor(selectedHex.ifBlank { "#%08X".format((autoAccent ?: baseAccent).toArgb()) }))
     }.getOrDefault(baseAccent)
 
-    // 用可变状态持有最新值，供 onDispose 退出即应用时读取，避免闭包捕获首帧旧值
+    // 用可变状态持有最新值，供 flushAndReport 退出即应用时读取，避免闭包捕获首帧旧值
     val holdAccent = remember { mutableStateOf(accent) }
-    val holdImages = remember { mutableStateOf(images) }
-    val holdHex = remember { mutableStateOf(selectedHex) }
     val holdPin = remember { mutableStateOf(logoPin) }
     val holdScale = remember { mutableStateOf(logoScale) }
     val holdCrop = remember { mutableStateOf(logoCrop) }
     val holdWidthPct = remember { mutableStateOf(logoWidthPct) }
     val holdHeightPct = remember { mutableStateOf(logoHeightPct) }
     LaunchedEffect(accent) { holdAccent.value = accent }
-    LaunchedEffect(images) { holdImages.value = images }
-    LaunchedEffect(selectedHex) { holdHex.value = selectedHex }
     LaunchedEffect(logoPin) { holdPin.value = logoPin }
     LaunchedEffect(logoScale) { holdScale.value = logoScale }
     LaunchedEffect(logoCrop) { holdCrop.value = logoCrop }
     LaunchedEffect(logoWidthPct) { holdWidthPct.value = logoWidthPct }
     LaunchedEffect(logoHeightPct) { holdHeightPct.value = logoHeightPct }
 
-    // 退出即写 meta，不在此处弹 toast——由美术资源二级页（Hub）统一弹出「已应用自定义主题」提示。
+    // 页内即时提示（项目标准 ReverieToast 浮层，替代系统 Toast）：目前用于「图片保存失败」错误反馈；
+    // 「已应用自定义主题」成功提示仍由美术资源二级页（Hub）统一弹出，本页不重复。
+    var toastMsg by remember { mutableStateOf<String?>(null) }
+    var toastKey by remember { mutableStateOf(0) }
+    LaunchedEffect(toastKey) { if (toastMsg != null) { delay(2500); toastMsg = null } }
+
     val act = ctx as ComponentActivity
-    /** 统一退出：写 meta（主色 + logo 尺寸/贴边），立即回传 RESULT_OK 并 finish，由 Hub 页处理 toast。 */
-    fun requestExit() {
-        val imgs = holdImages.value
-        val changed = imgs.any { it != null } || holdHex.value.isNotBlank() ||
-            holdPin.value != initialPin.value || holdScale.value != initialScale.value || holdCrop.value != initialCrop.value ||
-            holdWidthPct.value != initialWidthPct.value || holdHeightPct.value != initialHeightPct.value
+    /**
+     * 统一退出落盘（幂等）：有改动（dirty）才写 meta + 广播 ArtChangeBus，返回「本次会话是否有改动」。
+     * flushed 守卫保证 requestExit 与 Activity.onStop（系统手势返回兜底）先后触发时只落盘一次。
+     */
+    val flushed = remember { mutableStateOf<Boolean?>(null) }
+    fun flushAndReport(): Boolean {
+        flushed.value?.let { return it }
+        val changed = dirty.value
         if (changed) {
             runCatching {
                 writeCustomMeta(
@@ -406,34 +464,29 @@ fun SteamArtCustomScreen(
                     holdWidthPct.value, holdHeightPct.value
                 )
             }
+            // 美术已落地：广播变更，令所有游戏页及子页立即重算主题（含背后的游戏页一级页）
+            ArtChangeBus.notify(pkg)
         }
-        scope.launch {
-            act.setResult(Activity.RESULT_OK)
-            act.finish()
-        }
+        flushed.value = changed
+        return changed
     }
-    // 系统 / 预测返回统一走 requestExit（替代 Activity 级 enablePredictiveBack）。
-    BackHandler(enabled = true) { requestExit() }
-
-    // 兜底：即便不经由 requestExit（极端情况下系统直接销毁），也确保 meta 已落盘。
+    /** 统一退出：flush 后仅在真有改动时回传 RESULT_OK（Hub 据此弹「已应用自定义主题」），随后 finish。 */
+    fun requestExit() {
+        if (flushAndReport()) act.setResult(Activity.RESULT_OK)
+        act.finish()
+    }
+    // 系统手势返回兜底：把 flush 注册给宿主 Activity，在 onStop(isFinishing) 统一补落盘 + RESULT_OK。
+    // 修复：此前手势返回完全绕过保存链路（仅 onDispose 静默写 meta，不广播、不回传 RESULT_OK），
+    // 导致 Hub 不弹「已应用自定义主题」、背后页面不刷新。
+    val hostAct = act as? SteamArtCustomActivity
     DisposableEffect(Unit) {
-        onDispose {
-            val imgs = holdImages.value
-            val changed = imgs.any { it != null } || holdHex.value.isNotBlank() ||
-                holdPin.value != "BottomLeft" || holdScale.value != 1f || holdCrop.value
-            if (changed) runCatching {
-                writeCustomMeta(
-                    ctx, pkg, holdAccent.value, holdPin.value,
-                    holdScale.value, holdCrop.value,
-                    holdWidthPct.value, holdHeightPct.value
-                )
-            }
-        }
+        hostAct?.flushOnExit = { flushAndReport() }
+        onDispose { hostAct?.flushOnExit = null }
     }
 
     // ── 手柄焦点状态机（自定义主题页全面适配：焦点覆盖 / 空间导航 / 高对比焦点框 / A 确认）──
-    // 槽位：0=返回, 1..6=图片槽(2列×3行), 7..14=主色预设(8), 15..23=Logo位置(3×3), 24=Logo尺寸滑块, 25=Logo贴边开关。
-    val totalSlots = 26
+    // 槽位：0=返回, 1..6=图片槽(2列×3行), 7..14=主色预设(8), 15=自动取色, 16..24=Logo位置(3×3), 25=Logo尺寸滑块, 26=Logo贴边开关。
+    val totalSlots = 27
     /**
      * 槽位位置追踪：把每个可交互元素测量时的窗口绝对 y / 高度 / 当时滚动偏移写入
      * [slotTop]/[slotH]/[slotScroll]，三者组合可在任意时刻折算「槽位相对滚动内容的偏移」P
@@ -487,8 +540,18 @@ fun SteamArtCustomScreen(
         picked?.let { uri ->
             val idx = pendingPickIdx.value
             if (idx in 0..5) {
+                val prev = images[idx]
                 images = images.toMutableList().also { it[idx] = uri }
-                scope.launch(Dispatchers.IO) { copyCustomImage(ctx, pkg, idx, uri) }
+                dirty.value = true
+                scope.launch(Dispatchers.IO) {
+                    val ok = copyCustomImage(ctx, pkg, idx, uri)
+                    if (!ok) withContext(Dispatchers.Main) {
+                        // 落盘失败：回滚该槽位预览并给出页内提示（此前仅 Log.w 静默，用户无感知）
+                        images = images.toMutableList().also { it[idx] = prev }
+                        toastMsg = "图片保存失败，请重试"
+                        toastKey++
+                    }
+                }
             }
         }
     }
@@ -497,27 +560,32 @@ fun SteamArtCustomScreen(
         when (slot) {
             0 -> requestExit()
             in 1..6 -> pickImage(slot - 1)
-            in 7..14 -> selectedHex = presetHexes[slot - 7]
-            in 15..23 -> logoPin = LOGO_POSITIONS[slot - 15]
-            24 -> { /* 滑块：左右已调档，A 无额外动作 */ }
-            25 -> logoCrop = !logoCrop
+            in 7..14 -> { selectedHex = presetHexes[slot - 7]; dirty.value = true }
+            15 -> { selectedHex = ""; dirty.value = true }  // 恢复自动取色（清空手动主色）
+            in 16..24 -> { logoPin = LOGO_POSITIONS[slot - 16]; dirty.value = true }
+            25 -> { /* 滑块：左右已调档，A 无额外动作 */ }
+            26 -> { logoCrop = !logoCrop; dirty.value = true }
         }
     }
     fun moveFocus(dir: Direction) {
         val fi = focusIndex.value
         focusIndex.value = when {
-            fi in 15..23 -> when (dir) {
-                Direction.UP -> 15 + (((fi - 15) / 3) - 1).coerceAtLeast(0) * 3 + (fi - 15) % 3
-                Direction.DOWN -> 15 + (((fi - 15) / 3) + 1).coerceAtMost(2) * 3 + (fi - 15) % 3
-                Direction.LEFT -> 15 + ((fi - 15) / 3) * 3 + (((fi - 15) % 3) - 1).coerceAtLeast(0)
-                Direction.RIGHT -> 15 + ((fi - 15) / 3) * 3 + (((fi - 15) % 3) + 1).coerceAtMost(2)
+            fi in 16..24 -> when (dir) {
+                Direction.UP -> 16 + (((fi - 16) / 3) - 1).coerceAtLeast(0) * 3 + (fi - 16) % 3
+                Direction.DOWN -> 16 + (((fi - 16) / 3) + 1).coerceAtMost(2) * 3 + (fi - 16) % 3
+                Direction.LEFT -> 16 + ((fi - 16) / 3) * 3 + (((fi - 16) % 3) - 1).coerceAtLeast(0)
+                Direction.RIGHT -> 16 + ((fi - 16) / 3) * 3 + (((fi - 16) % 3) + 1).coerceAtMost(2)
             }
             dir == Direction.UP -> (fi - 1).coerceAtLeast(0)
             dir == Direction.DOWN -> (fi + 1).coerceAtMost(totalSlots - 1)
             dir == Direction.LEFT || dir == Direction.RIGHT -> when {
                 fi in 1..6 -> if ((fi - 1) % 2 == 0) fi + 1 else fi - 1
-                fi in 7..14 -> (fi + if (dir == Direction.RIGHT) 1 else -1).coerceIn(7, 14)
-                fi == 24 -> { logoScale = (logoScale + if (dir == Direction.RIGHT) 0.02f else -0.02f).coerceIn(0.5f, 1.5f); fi }
+                fi in 7..15 -> (fi + if (dir == Direction.RIGHT) 1 else -1).coerceIn(7, 15)
+                fi == 25 -> {
+                    logoScale = (logoScale + if (dir == Direction.RIGHT) 0.02f else -0.02f).coerceIn(0.5f, 1.5f)
+                    dirty.value = true
+                    fi
+                }
                 else -> fi
             }
             else -> fi
@@ -543,7 +611,8 @@ fun SteamArtCustomScreen(
                 }
             }
     ) {
-        GameArtBackground(art, accent)
+        // 有整页背景图 → 深色 + 压暗遮罩（泛白部件）；无任何背景图 → 走 theme 的浅色主题化兜底（白底，此时确实无美术）
+        GameArtBackground(art, accent, themedNoArtFallback = themedNoArtFallback)
         Column(
             Modifier
                 .fillMaxSize()
@@ -559,7 +628,7 @@ fun SteamArtCustomScreen(
                 onBack = { requestExit() },
                 isBackFocused = focusIndex.value == 0,
                 onBackFocus = { focusIndex.value = 0 },
-                contentColor = Color.White,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.fillMaxWidth(),
                 titleStyle = if (wide) MaterialTheme.typography.titleLarge
                              else MaterialTheme.typography.titleMedium
@@ -584,7 +653,7 @@ fun SteamArtCustomScreen(
             Text(
                 "选择 6 张图片拼贴自定义主题（${images.count { it != null }}/6）",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(Dimens.sm))
 
@@ -594,7 +663,9 @@ fun SteamArtCustomScreen(
                     .fillMaxWidth()
                     .height(200.dp)
                     .clip(RoundedCornerShape(Dimens.md))
-                    .background(SurfaceTokens.mutedOnSurface())
+                    // 修复：原误用 mutedOnSurface（onSurfaceVariant 文字色）作表面色，深色美术上几乎不可见；
+                    // 改用语义卡片表面 cardSurface(Subtle)，保证深色背景上有可见浮起感。
+                    .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle))
             ) {
                 CustomPreview(images = images, accent = accent)
             }
@@ -625,7 +696,7 @@ fun SteamArtCustomScreen(
 
             // ── 取主色（保留）───────────────────────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("主色", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text("主色", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.width(Dimens.sm))
                 // 当前主色圆形指示
                 Box(
@@ -633,13 +704,14 @@ fun SteamArtCustomScreen(
                         .size(22.dp)
                         .clip(CircleShape)
                         .background(accent)
-                        .border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
+                        .border(1.5.dp, SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis), CircleShape)
                 )
                 Spacer(Modifier.width(Dimens.sm))
                 Text(
                     if (selectedHex.isBlank()) "（自动从图片取色）" else "已选择",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.7f)
+                    // 辅助文字统一提档 Emphasis（0.8）：深色美术背景上 0.7 以下对比度不足、发灰发虚
+                    color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis)
                 )
             }
             Spacer(Modifier.height(Dimens.sm))
@@ -657,8 +729,8 @@ fun SteamArtCustomScreen(
                             .focusBorder(focusIndex.value == 7 + i, accent, CircleShape)
                             .clip(CircleShape)
                             .background(color)
-                            .then(if (selected) Modifier.border(2.dp, Color.White, CircleShape) else Modifier)
-                            .clickable { selectedHex = hex }.then(track(7 + i))
+                            .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
+                            .clickable { selectedHex = hex; dirty.value = true }.then(track(7 + i))
                     ) {
                         if (selected) {
                             Icon(
@@ -670,6 +742,27 @@ fun SteamArtCustomScreen(
                         }
                     }
                 }
+                // 自动取色（恢复默认主色）：清空手动主色，回落「图片自动取色 → 游戏页主色」链路。
+                // writeCustomMeta 无需改动：selectedHex 为空时 accent 已回落 autoAccent/baseAccent。
+                val autoSelected = selectedHex.isBlank()
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .focusBorder(focusIndex.value == 15, accent, CircleShape)
+                        .clip(CircleShape)
+                        .background(if (autoSelected) accent.copy(alpha = 0.25f) else Color.Transparent)
+                        .border(1.5.dp, if (autoSelected) accent else MaterialTheme.colorScheme.outline, CircleShape)
+                        .clickable { selectedHex = ""; dirty.value = true }
+                        .then(track(15)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.AutoFixNormal,
+                        contentDescription = "自动取色",
+                        tint = if (autoSelected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
             Spacer(Modifier.height(Dimens.lg))
@@ -678,9 +771,9 @@ fun SteamArtCustomScreen(
             LogoPositionPicker(
                 selected = logoPin,
                 accent = accent,
-                onPick = { logoPin = it },
+                onPick = { logoPin = it; dirty.value = true },
                 focusIndex = focusIndex.value,
-                baseSlot = 15,
+                baseSlot = 16,
                 cellTrack = track
             )
 
@@ -690,7 +783,7 @@ fun SteamArtCustomScreen(
             Text(
                 "Logo 尺寸",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(Dimens.sm))
             Row(
@@ -700,7 +793,7 @@ fun SteamArtCustomScreen(
                 Text(
                     "0.5x",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.7f),
+                    color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis),
                     modifier = Modifier.width(36.dp),
                     textAlign = TextAlign.Center
                 )
@@ -708,12 +801,12 @@ fun SteamArtCustomScreen(
                 BoxWithConstraints(Modifier.weight(1f)) {
                     Slider(
                         value = logoScale,
-                        onValueChange = { logoScale = it.coerceIn(0.5f, 1.5f) },
+                        onValueChange = { logoScale = it.coerceIn(0.5f, 1.5f); dirty.value = true },
                         valueRange = 0.5f..1.5f,
                         // 去掉 steps → 无极连续拖动
                         modifier = Modifier.fillMaxWidth()
-                            .focusBorder(focusIndex.value == 24, accent, MaterialTheme.shapes.small)
-                            .then(track(24)),
+                            .focusBorder(focusIndex.value == 25, accent, MaterialTheme.shapes.small)
+                            .then(track(25)),
                         colors = SliderDefaults.colors(
                             thumbColor = accent,
                             activeTrackColor = accent,
@@ -729,13 +822,13 @@ fun SteamArtCustomScreen(
                             .offset(x = maxWidth * tickFrac - 1.dp)
                             .width(2.dp)
                             .height(12.dp)
-                            .background(Color.White.copy(alpha = 0.5f), RoundedCornerShape(1.dp))
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(1.dp))
                     )
                 }
                 Text(
                     "1.5x",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.7f),
+                    color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis),
                     modifier = Modifier.width(36.dp),
                     textAlign = TextAlign.Center
                 )
@@ -743,7 +836,7 @@ fun SteamArtCustomScreen(
             Text(
                 "当前：${"%.0f".format(logoScale * 100)}%",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.7f)
+                color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis)
             )
 
             Spacer(Modifier.height(Dimens.lg))
@@ -757,20 +850,20 @@ fun SteamArtCustomScreen(
                     Text(
                         "Logo 贴边",
                         style = MaterialTheme.typography.titleMedium,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.height(Dimens.xs))
                     Text(
                         "裁掉 logo 四周透明边距，让真实内容顶满盒子（可见 logo 会变大）。每游戏独立设置。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.7f)
+                        color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis)
                     )
                 }
                 Switch(
                     checked = logoCrop,
-                    onCheckedChange = { logoCrop = it },
-                    modifier = Modifier.focusBorder(focusIndex.value == 25, accent, MaterialTheme.shapes.small)
-                        .then(track(25)),
+                    onCheckedChange = { logoCrop = it; dirty.value = true },
+                    modifier = Modifier.focusBorder(focusIndex.value == 26, accent, MaterialTheme.shapes.small)
+                        .then(track(26)),
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = accent,
                         checkedTrackColor = accent.copy(alpha = 0.5f),
@@ -780,15 +873,17 @@ fun SteamArtCustomScreen(
                 )
             }
 
-            // 应用说明：选图即自动保存，退出本页时自动应用主色与 logo 位置（见 onDispose），无需手动点击应用。
+            // 应用说明：选图即自动保存，退出本页时自动应用主色与 logo 位置（见 flushAndReport），无需手动点击应用。
             Text(
                 "选择图片即自动保存；退出本页时自动应用主色与 Logo 位置。",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.7f)
+                color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis)
             )
             }  // close inner scroll Column (内容滚动区)
         }
 
+        // 页内错误提示浮层（项目标准 ReverieToast）：目前仅「图片保存失败，请重试」
+        ReverieToast(message = toastMsg)
     }
 }
 
@@ -808,7 +903,9 @@ fun CustomImageSlot(
         modifier
             .focusBorder(focused, accent, RoundedCornerShape(Dimens.sm))
             .clip(RoundedCornerShape(Dimens.sm))
-            .background(SurfaceTokens.mutedOnSurface())
+            // 修复：原误用 mutedOnSurface（onSurfaceVariant×0.6 文字色）作卡片底色，深色美术上
+            // 六个槽位几乎与背景融合成「幽灵卡片」；改语义卡片表面 cardSurface(Subtle) 保证可见浮起感。
+            .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle))
             .clickable { onRequestPick() }
             .padding(Dimens.sm),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -837,7 +934,7 @@ fun CustomImageSlot(
                         else -> Icons.Filled.Image
                     },
                     contentDescription = kind.label,
-                    tint = Color.White.copy(alpha = 0.6f),
+                    tint = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis),
                     modifier = Modifier.size(26.dp)
                 )
             }
@@ -874,13 +971,13 @@ fun CustomImageSlot(
         Spacer(Modifier.height(Dimens.xxs))
         Text(
             kind.label,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1
         )
         Text(
             kind.title,
-            color = Color.White.copy(alpha = 0.6f),
+            color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis),
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -956,14 +1053,15 @@ fun LogoPositionPicker(
             else -> Alignment.BottomEnd
         }
     }
-    Text("Logo 位置（9 宫格，固定尺寸）", style = MaterialTheme.typography.titleMedium, color = Color.White)
+    Text("Logo 位置（9 宫格，固定尺寸）", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
     Spacer(Modifier.height(Dimens.sm))
     Column(
         Modifier
             .fillMaxWidth()
             .height(150.dp)
             .clip(RoundedCornerShape(Dimens.sm))
-            .background(SurfaceTokens.mutedOnSurface())
+            // 修复：原误用 mutedOnSurface（文字色）作容器底色，深色美术上不可见；改语义卡片表面。
+            .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle))
             .padding(Dimens.sm)
     ) {
         for (r in 0..2) {
@@ -976,18 +1074,21 @@ fun LogoPositionPicker(
                             .weight(1f)
                             .fillMaxSize()
                             .padding(3.dp)
-                            .focusBorder(focusIndex >= 0 && focusIndex == baseSlot + (r * 3 + c), accent, RoundedCornerShape(6.dp))
-                            .clip(RoundedCornerShape(6.dp))
+                            .focusBorder(focusIndex >= 0 && focusIndex == baseSlot + (r * 3 + c), accent, RoundedCornerShape(Dimens.RadiusSm))
+                            .clip(RoundedCornerShape(Dimens.RadiusSm))
                             .background(if (sel) accent.copy(alpha = 0.25f) else Color.Transparent)
-                            .then(if (sel) Modifier.border(1.5.dp, accent, RoundedCornerShape(6.dp)) else Modifier)
+                            .then(if (sel) Modifier.border(1.5.dp, accent, RoundedCornerShape(Dimens.RadiusSm)) else Modifier)
                             .clickable { onPick(p) }.then(cellTrack?.invoke(baseSlot + (r * 3 + c)) ?: Modifier),
                         contentAlignment = cellAlign(p)
                     ) {
+                        // 修复：未选中点原用 onSurfaceVariant×0.5 实心圆，深色美术上 9 个点位难以辨认；
+                        // 改「透明底 + outline 轮廓环」，保证全部点位可见；选中点保持 accent 实心。
                         Box(
                             Modifier
                                 .size(14.dp)
                                 .clip(CircleShape)
-                                .background(if (sel) accent else Color.White.copy(alpha = 0.5f))
+                                .background(if (sel) accent else Color.Transparent)
+                                .border(1.5.dp, if (sel) accent else MaterialTheme.colorScheme.outline, CircleShape)
                         )
                     }
                 }
@@ -995,7 +1096,13 @@ fun LogoPositionPicker(
         }
     }
     Spacer(Modifier.height(Dimens.xs))
-    Text("当前：$selected", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f))
+    // UI 文本全中文铁律：位置名称展示中文（内部存储仍用英文枚举串，不影响 meta 兼容）
+    val posZh = mapOf(
+        "TopLeft" to "左上", "TopCenter" to "上中", "TopRight" to "右上",
+        "CenterLeft" to "左中", "CenterCenter" to "居中", "CenterRight" to "右中",
+        "BottomLeft" to "左下", "BottomCenter" to "下中", "BottomRight" to "右下"
+    )
+    Text("当前：${posZh[selected] ?: selected}", style = MaterialTheme.typography.bodySmall, color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Emphasis))
 }
 
 /** 自定义主题落盘文件名：与 SteamDB 提取同名，保证「后写覆盖」天然高于自动提取与无美术资源。 */
@@ -1010,21 +1117,23 @@ fun customFileName(kind: AssetKind): String = when (kind) {
     else -> "library_hero.jpg"
 }
 
-/** 选图即时落盘：单张图写入对应固定文件名（覆盖同名 SteamDB 提取结果）。流式拷贝避免大图 OOM。 */
+/**
+ * 选图即时落盘：单张图写入对应固定文件名（覆盖同名 SteamDB 提取结果）。流式拷贝避免大图 OOM。
+ * @return 是否落盘成功——失败时调用方回滚槽位预览并弹页内提示（此前返回 Unit 静默失败，用户无感知）。
+ */
 suspend fun copyCustomImage(
     ctx: android.content.Context,
     pkg: String,
     index: Int,
     uri: Uri
-) {
-    val kind = AssetKind.FOR_GAME.getOrNull(index) ?: return
+): Boolean {
+    val kind = AssetKind.FOR_GAME.getOrNull(index) ?: return false
     val dir = File(ctx.filesDir, "steamart/$pkg").also { it.mkdirs() }
     val fileName = customFileName(kind)
-    runCatching {
-        ctx.contentResolver.openInputStream(uri)?.use { ins ->
-            File(dir, fileName).outputStream().use { outs -> ins.copyTo(outs) }
-        }
-    }.onFailure { android.util.Log.w("SteamArtCustom", "图片落盘失败 $fileName: ${it.message}") }
+    return runCatching {
+        val ins = ctx.contentResolver.openInputStream(uri) ?: error("无法读取所选图片")
+        ins.use { s -> File(dir, fileName).outputStream().use { outs -> s.copyTo(outs) } }
+    }.onFailure { android.util.Log.w("SteamArtCustom", "图片落盘失败 $fileName: ${it.message}") }.isSuccess
 }
 
 /** 退出时落盘 meta（主色 + logo 位置 + 尺寸档位 + 贴边开关），保留既有 steamAppId；图片由选图时逐张落盘完成。 */
@@ -1046,6 +1155,8 @@ fun writeCustomMeta(
         // 携带真实尺寸后 hasSize=true，computeLogoBox 走精确尺寸分支，与 HeroBanner 表现一致；
         // 无导入尺寸时 widthPct/heightPct=0 → hasSize=false → 回落默认百分比 + logoScale。
         put("accentColor", "#%08X".format(accent.toArgb()))
+        // 标记为「用户自定义」来源：游戏页据此前往自动取色（亮图黑字 / 暗图白字），与 SteamDB 美术（恒白字）区分。
+        put("custom", true)
         put(
             "logoPosition",
             LogoPosition(

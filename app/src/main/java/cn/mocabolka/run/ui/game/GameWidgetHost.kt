@@ -204,6 +204,10 @@ class WidgetBindingStore(context: Context) {
         prefs.edit().remove(key(gamePkg, hostPkg)).apply()
     }
 
+    /** 枚举某游戏名下已有绑定记录的宿主包（含用户经系统全量选择器手选的非社区 App），供重进页面恢复槽位。 */
+    fun hostsFor(gamePkg: String): List<String> =
+        prefs.all.keys.filter { it.startsWith("$gamePkg|") }.map { it.substringAfter("|") }
+
     companion object {
         private const val PREFS_NAME = "game_widget_bindings"
     }

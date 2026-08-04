@@ -3,13 +3,17 @@ package cn.mocabolka.run.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import cn.mocabolka.run.ui.enablePredictiveBack
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.lifecycleScope
 import cn.mocabolka.run.gamepad.Direction
-import cn.mocabolka.run.gamepad.SubPageGamepadHost
+import android.view.KeyEvent
+import android.view.MotionEvent
+import cn.mocabolka.run.gamepad.SubPageActivityHost
+import cn.mocabolka.run.gamepad.markInputModeGamepad
+import cn.mocabolka.run.gamepad.markInputModeTouch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import cn.mocabolka.run.ui.components.LicensesPage
 import cn.mocabolka.run.ui.theme.LandscapeTheme
@@ -27,29 +31,19 @@ import cn.mocabolka.run.ui.theme.MotionMachines
  */
 class LicensesActivity : ComponentActivity() {
     /** 右摇杆滚动引擎。 */
-    private lateinit var subPageGamepad: SubPageGamepadHost
+    private lateinit var subPage: SubPageActivityHost
     /** 列表状态提升到 Activity 字段，供右摇杆滚动引擎访问。 */
     private lateinit var listState: LazyListState
-    /** 右摇杆滚动后引擎回写的首个可视项索引（焦点跟随桥梁）。 */
-    private val rightStickFirstVisible = kotlinx.coroutines.flow.MutableStateFlow(-1)
-    /** 左摇杆 / Hat 导航事件桥梁：SubPageGamepad.onNavigate 推入，SubPageScaffold 订阅驱动焦点。 */
-    private val navFlow = MutableSharedFlow<Direction>(extraBufferCapacity = 16)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         listState = LazyListState()
-        subPageGamepad = SubPageGamepadHost(
-            lifecycleScope,
+        subPage = SubPageActivityHost(
+            activity = this,
             getState = { listState },
-            getFirstVisibleItemIndex = { listState.firstVisibleItemIndex },
-            onFocusSync = { rightStickFirstVisible.value = it },
-            onNavigate = { dir -> navFlow.tryEmit(dir) }
+            getFirstVisibleItemIndex = { listState.firstVisibleItemIndex }
         )
-        subPageGamepad.start()
-        // 沉浸式 + 边缘到边缘（统一预测性返回手势窗口配置）
-        setupEdgeToEdgeImmersive(hideStatusBar = false)
-        // 预测返回手势（minSdk=36 恒生效）：支持系统级返回退出，回到 AboutActivity。
-        enablePredictiveBack { finish() }
+        subPage.start()
 
         val settings = SettingsRepository(this)
         setContent {
@@ -61,12 +55,12 @@ class LicensesActivity : ComponentActivity() {
                     enter = MotionMachines.subPageEnter(reduceMotion = false),
                     exit = MotionMachines.subPageExit(reduceMotion = false)
                 ) {
-                    val rsFocus = rightStickFirstVisible.collectAsState()
+                    val rsFocus = subPage.rightStickFirstVisible.collectAsState()
                     LicensesPage(
                         onBack = { finish() },
                         listState = listState,
                         rightStickFirstVisible = rsFocus,
-                        navigate = navFlow,
+                        navigate = subPage.navFlow,
                         reduceMotion = settings.reduceMotion
                     )
                 }
@@ -77,12 +71,23 @@ class LicensesActivity : ComponentActivity() {
     }
 
     /** 右摇杆滚动：MotionEvent 轴委托给引擎；其余交系统。 */
-    override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean {
-        return if (subPageGamepad.dispatchMotionEvent(event)) true else super.onGenericMotionEvent(event)
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        markInputModeGamepad(event)
+        return if (subPage.dispatchMotionEvent(event)) true else super.onGenericMotionEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        markInputModeGamepad(event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        markInputModeTouch(ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
-        subPageGamepad.stop()
+        subPage.stop()
         super.onDestroy()
     }
 }

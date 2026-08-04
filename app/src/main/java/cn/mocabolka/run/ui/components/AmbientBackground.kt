@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import cn.mocabolka.run.ui.theme.LocalAmoledPureBlack
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.cos
@@ -54,6 +55,11 @@ fun AmbientBackground(
     /** 应用不可见时暂停无限动画（R13 省电）。 */
     paused: Boolean = false
 ) {
+    // AMOLED 纯黑模式：隐藏全部氛围渐变与流动粒子，背景直接纯黑（主界面改进，符合用户"全部暂时隐藏"诉求）。
+    if (LocalAmoledPureBlack.current) {
+        Box(modifier.fillMaxSize().background(Color.Black))
+        return
+    }
     Box(modifier.fillMaxSize()) {
         // 基础渐变（兜底 / 关闭动态时背景）
         // 两个**亮色**配对：顶部用 background，底部用 background 派生的提亮中性色，

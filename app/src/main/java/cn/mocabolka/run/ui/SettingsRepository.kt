@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+import cn.mocabolka.run.ui.theme.deviceProfile
+
 enum class DarkMode { SYSTEM, LIGHT, DARK, AMOLED }
 
 /** 兼容向导各项的持久化 key（P2-6 逐项完成追踪）。 */
@@ -104,7 +106,7 @@ class SettingsRepository(context: Context) {
     private val defaultOrientationMode: OrientationMode
         get() {
             val cfg = appContext.resources.configuration
-            val isNaturalPortrait = cfg.screenHeightDp >= cfg.screenWidthDp
+            val isNaturalPortrait = cfg.deviceProfile.isPortrait
             return if (isNaturalPortrait) OrientationMode.FORCE_PORTRAIT
             else OrientationMode.FORCE_LANDSCAPE
         }
@@ -281,12 +283,17 @@ class SettingsRepository(context: Context) {
      * library hero+logo 的 logo 匹配机制偶尔会出问题，故开放给用户自行选择更顺眼的版式，
      * 退出子页面 / 切换游戏后再回来仍保持上次选择。
      */
-    fun isBannerHeader(pkg: String): Boolean =
-        prefs.getStringSet(KEY_BANNER_HEADER_PKGS, emptySet())?.contains(pkg) == true
+    private val _bannerHeaderPkgs = MutableStateFlow(
+        prefs.getStringSet(KEY_BANNER_HEADER_PKGS, emptySet()) ?: emptySet()
+    )
+    val bannerHeaderFlow: StateFlow<Set<String>> = _bannerHeaderPkgs.asStateFlow()
+
+    fun isBannerHeader(pkg: String): Boolean = _bannerHeaderPkgs.value.contains(pkg)
 
     fun setBannerHeader(pkg: String, header: Boolean) {
-        val set = prefs.getStringSet(KEY_BANNER_HEADER_PKGS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        val set = _bannerHeaderPkgs.value.toMutableSet()
         if (header) set.add(pkg) else set.remove(pkg)
+        _bannerHeaderPkgs.value = set
         prefs.edit { putStringSet(KEY_BANNER_HEADER_PKGS, set) }
     }
 

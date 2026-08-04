@@ -116,7 +116,7 @@ private fun GlassKeyBadge(token: KeyToken, modifier: Modifier) {
         Box(
             modifier = modifier
                 .size(width = 26.dp, height = 22.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .clip(RoundedCornerShape(Dimens.RadiusSm))
                 .background(SurfaceTokens.glassBg()),
             contentAlignment = Alignment.Center
         ) {
@@ -170,7 +170,7 @@ private fun GlassKeyBadgeText(text: String, modifier: Modifier) {
                 if (isArrow) Modifier.size(28.dp)
                 else Modifier.size(width = 26.dp, height = 22.dp)
             )
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Dimens.RadiusSm))
             .background(SurfaceTokens.glassBg()),
         contentAlignment = Alignment.Center
     ) {
@@ -327,9 +327,7 @@ fun BottomHintBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(Dimens.HintBarDivider)
-                .background(
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.10f)
-                )
+                .background(SurfaceTokens.hairlineDividerColor())
         )
         Row(
             modifier = Modifier
@@ -539,7 +537,7 @@ fun SubPageBackButton(
     Box(
         modifier = modifier
             .size(40.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Dimens.RadiusLg))
             .background(backgroundColor)
             .clickable { onFocus(); onClick() },
         contentAlignment = Alignment.Center
@@ -572,7 +570,7 @@ fun TitleBarIconButton(
     Box(
         modifier = modifier
             .size(40.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Dimens.RadiusLg))
             .background(backgroundColor)
             .clickable { onFocus(); onClick() },
         contentAlignment = Alignment.Center

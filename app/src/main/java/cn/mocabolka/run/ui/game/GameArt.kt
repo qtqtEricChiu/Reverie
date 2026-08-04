@@ -12,6 +12,22 @@ import org.json.JSONArray
 import java.io.File
 import java.net.URL
 import cn.mocabolka.run.ui.game.steamart.domain.model.LogoPosition
+import kotlinx.coroutines.flow.MutableSharedFlow
+
+/**
+ * 美术资源变更总线（单一真源）。
+ *
+ * 任意页面「新建 / 更换 / 清除」游戏美术（SteamDB 提取、自定义主题保存、清除）后，
+ * 调用 [notify] 广播对应包名；所有游戏页及其二级/三级子页（游戏页本身、美术 Hub、自定义主题、
+ * 截图总览）订阅 [changes] 后**立即**重读美术并重新判定主题（深色+反白 / 浅色跟随设置），
+ * 彻底消除「页面刷新不及时」导致的背景取色 / 明暗不一致。
+ */
+object ArtChangeBus {
+    // replay = 1：保留最后一次广播，确保延迟订阅者（子页 onCreate 期间尚未开始 collect 时）不会漏信号；
+    // extraBufferCapacity = 16：应对快速连续刷新（如缓存驱逐后切回）而不丢帧。
+    val changes = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 16)
+    fun notify(packageName: String) { changes.tryEmit(packageName) }
+}
 
 /**
  * 游戏美术资源抽象层。
@@ -63,7 +79,8 @@ data class GameArt(
     val header: GameArtImage?,
     val accentColor: Color? = null,
     val steamAppId: Long? = null,
-    val logoPosition: LogoPosition? = null
+    val logoPosition: LogoPosition? = null,
+    val isCustom: Boolean = false
 )
 
 /**
@@ -299,11 +316,19 @@ object GameArtTombstone {
     }
 }
 
-/** 进程内位图缓存，避免同一资源重复解码（背景/横幅较大）。 */
-private val artBitmapCache = androidx.collection.LruCache<String, ImageBitmap>(32)
+/**
+ * 进程内位图缓存，避免同一资源重复解码（背景/横幅较大）。
+ * 容量须覆盖 [GAME_CACHE_MAX]（游戏页快照上限=12）个游戏 × 每游戏 ~4 张图（logo/capsule/header/hero），
+ * 取 48 留余量，使左右切回已访问游戏时位图仍在缓存、免重新解码 IO（美术刷新链路审计 item 2）。
+ */
+private val artBitmapCache = androidx.collection.LruCache<String, ImageBitmap>(48)
 
-/** 进程内 GameArt 元数据缓存（键=包名）：[GameArtResolver.load] 命中即写入。 */
-private val gameArtCache = androidx.collection.LruCache<String, GameArt>(16)
+/**
+ * 进程内 GameArt 元数据缓存（键=包名）：[GameArtResolver.load] 命中即写入。
+ * 单游戏仅 1 条元数据、体积可忽略；容量 24 > [GAME_CACHE_MAX]=12，确保快照缓存未驱逐前元数据恒命中
+ * （审计 item 1：切游戏不会先驱逐美术元数据）。
+ */
+private val gameArtCache = androidx.collection.LruCache<String, GameArt>(24)
 
 /**
  * 同步读取进程内已缓存的 [GameArt]（无 IO）。二级子页（截图查看全部等）从游戏页进入时，
@@ -359,8 +384,8 @@ internal fun parseColor(hex: String): Color = runCatching {
 //  - 归一化到"深色 UI 友好"区间（饱和度 0.55~0.9、明度 0.5~0.85），保证对比度与观感统一。
 // ─────────────────────────────────────────────────────────────
 
-/** 提取结果缓存：键为首个来源标识，避免同游戏重复解码/计算。 */
-private val accentCache = androidx.collection.LruCache<String, Color>(32)
+/** 提取结果缓存：键为首个来源标识，避免同游戏重复解码/计算。容量与位图缓存对齐（审计 item 2）。 */
+private val accentCache = androidx.collection.LruCache<String, Color>(48)
 
 /**
  * 从一组候选取色图片依次尝试提取鲜艳主色；全部失败时返回 [fallback]。

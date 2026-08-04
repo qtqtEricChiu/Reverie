@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,6 +37,40 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import android.appwidget.AppWidgetHostView
 import cn.mocabolka.run.launcher.AppModel
+
+/** 游戏页手柄按键常量别名：统一命名，震动表与行为分发表共用，避免双处维护漂移（审计 3.3 / 3.5）。 */
+private object GPKey {
+    const val UP = android.view.KeyEvent.KEYCODE_DPAD_UP
+    const val UP_SYS = android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP
+    const val DOWN = android.view.KeyEvent.KEYCODE_DPAD_DOWN
+    const val DOWN_SYS = android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_DOWN
+    const val LEFT = android.view.KeyEvent.KEYCODE_DPAD_LEFT
+    const val LEFT_SYS = android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_LEFT
+    const val RIGHT = android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+    const val RIGHT_SYS = android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_RIGHT
+    const val CENTER = android.view.KeyEvent.KEYCODE_DPAD_CENTER
+    const val ENTER = android.view.KeyEvent.KEYCODE_ENTER
+    const val A = android.view.KeyEvent.KEYCODE_BUTTON_A
+    const val B = android.view.KeyEvent.KEYCODE_BUTTON_B
+    const val X = android.view.KeyEvent.KEYCODE_BUTTON_X
+    const val Y = android.view.KeyEvent.KEYCODE_BUTTON_Y
+    const val LB = android.view.KeyEvent.KEYCODE_BUTTON_L1
+    const val RB = android.view.KeyEvent.KEYCODE_BUTTON_R1
+    const val LT = android.view.KeyEvent.KEYCODE_BUTTON_L2
+    const val RT = android.view.KeyEvent.KEYCODE_BUTTON_R2
+    const val BACK = android.view.KeyEvent.KEYCODE_BACK
+}
+
+/** 统一震动映射：方向键 / 肩键 / 扳机 = tick，确认 / 返回 / 收藏 = click（审计 3.3）。 */
+private fun hapticFor(code: Int) {
+    when (code) {
+        GPKey.UP, GPKey.UP_SYS, GPKey.DOWN, GPKey.DOWN_SYS,
+        GPKey.LEFT, GPKey.LEFT_SYS, GPKey.RIGHT, GPKey.RIGHT_SYS,
+        GPKey.LB, GPKey.RB, GPKey.LT, GPKey.RT -> Haptics.tick()
+        GPKey.CENTER, GPKey.ENTER, GPKey.A, GPKey.B, GPKey.BACK, GPKey.X -> Haptics.click()
+        else -> Unit
+    }
+}
 
 /**
  * 游戏专属页面（参考 Steam 大屏幕模式「游戏库 → 游戏」界面）。
@@ -73,6 +108,7 @@ fun GamePageScreen(
     onToggleFavorite: () -> Unit,
     onClose: () -> Unit,
     onOpenAppInfo: () -> Unit,
+    onPinShortcut: () -> Unit = {},
     onOpenArt: (androidx.compose.ui.graphics.Color) -> Unit = {},
     onSwitchGame: (Int) -> Unit,
     widgetSlots: List<WidgetHostSlot> = emptyList(),
@@ -81,6 +117,11 @@ fun GamePageScreen(
     widgetVersion: Int = 0,
     widgetLoading: Boolean = false,
     onPickWidgetProvider: (String, WidgetProviderItem) -> Unit = { _, _ -> },
+    /** 社区 App 均未安装时的兜底：打开系统全量 Widget 选择器，允许绑定任意（非社区）App 的 Widget。 */
+    onPickAnyWidget: () -> Unit = {},
+    /** 社区 App 均未安装时 Widget 面板是否收折（按游戏记忆）；收折态 A 先展开。 */
+    widgetCollapsed: Boolean = false,
+    onExpandWidget: () -> Unit = {},
     screenshotGallery: GameScreenshots.ScreenshotGalleryState? = null,
     rightStickFirstVisible: State<Int> = remember { mutableStateOf(-1) },
     onActiveListState: (LazyListState) -> Unit = {},
@@ -143,8 +184,10 @@ fun GamePageScreen(
     val header = art?.header
 
     // 内部焦点状态机（扁平索引，与 GamePageBody 同源）
-    var focusIndex by remember { mutableStateOf(GPSlots.LAUNCH) }
-    var selectedTab by remember { mutableStateOf(0) }
+    var focusIndex by remember { mutableIntStateOf(GPSlots.LAUNCH) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    // 每 Tab 记忆上次离开时的内容区焦点位置，切回时恢复（避免切 Tab 丢失内容区位置，P1.6）
+    val tabFocusMemory = remember { intArrayOf(GPSlots.TAB_DYNAMIC, GPSlots.TAB_STATS, GPSlots.TAB_ABOUT) }
 
     // 进入即请求焦点，确保手柄/键盘事件稳定送达 onKeyEvent
     val focusRequester = remember { FocusRequester() }
@@ -186,7 +229,11 @@ fun GamePageScreen(
         val entries = installed
             .map { s -> PickerEntry(s, availableProviders[s.packageName] ?: emptyList()) }
             .filter { it.providers.isNotEmpty() }
-        if (entries.isEmpty()) return
+        if (entries.isEmpty()) {
+            // 无已安装社区 App（或均无可用 Provider）：兜底走系统全量选择器，绑定其它非社区 App 的 Widget。
+            onPickAnyWidget()
+            return
+        }
         if (entries.size == 1 && entries[0].providers.size == 1) {
             onPickWidgetProvider(entries[0].slot.packageName, entries[0].providers[0])
         } else {
@@ -195,8 +242,10 @@ fun GamePageScreen(
     }
 
     val installedSlots = widgetSlots.filter { it.isInstalled }
-    val personalizationAvailable = installedSlots.isNotEmpty() &&
-        (installedSlots.any { it.isBound } || installedSlots.any { (availableProviders[it.packageName] ?: emptyList()).isNotEmpty() })
+    // 收折行也计入可聚焦内容：社区 App 均未安装时面板收折为一行按钮（点击/A 走系统全量选择器绑定任意 App Widget）。
+    val personalizationAvailable = (installedSlots.isEmpty() && widgetSlots.isNotEmpty()) ||
+        (installedSlots.isNotEmpty() &&
+            (installedSlots.any { it.isBound } || installedSlots.any { (availableProviders[it.packageName] ?: emptyList()).isNotEmpty() }))
     // 截图画廊（动态 Tab 首个内容项）作为可聚焦槽：左/右选图、A 打开。计入内容项数以支持右摇杆焦点跟随。
     val galleryFocusable = screenshotGallery != null
     val contentCount = contentItemCount(data, selectedTab, if (personalizationAvailable) 1 else 0, if (galleryFocusable) 1 else 0)
@@ -208,7 +257,7 @@ fun GamePageScreen(
         maxShown + if (showViewAll) 1 else 0
     } else 0
     // 画廊内选中的截图纸贴序号（手柄左/右在画廊内逐张切换焦点；横向滚动随焦点跟随）。
-    var gallerySel by remember { mutableStateOf(0) }
+    var gallerySel by remember { mutableIntStateOf(0) }
     val lastIndex = GPSlots.CONTENT_START + contentCount - 1
 
     // 右摇杆滚动焦点跟随（归一化「停哪跟哪」）：引擎每帧回写首个可视项索引，
@@ -229,6 +278,7 @@ fun GamePageScreen(
             GPSlots.APP_INFO -> onOpenAppInfo()
             GPSlots.THEME -> onOpenArt(accent)
             GPSlots.FAVORITE -> onToggleFavorite()
+            GPSlots.SHORTCUT -> onPinShortcut()
             GPSlots.LAUNCH -> onLaunch()
             GPSlots.TAB_DYNAMIC -> selectedTab = 0
             GPSlots.TAB_STATS -> selectedTab = 1
@@ -254,12 +304,15 @@ fun GamePageScreen(
                                     when (g.setupState) {
                                         GameScreenshots.SetupState.NEED_TREE -> g.onRequestTree?.invoke()
                                         GameScreenshots.SetupState.NEED_SAMPLE -> g.onRequestSample?.invoke()
+                                        // 收折成一行时 A 先展开完整卡片（与触控点击同路）；已展开则保持原行为。
+                                        GameScreenshots.SetupState.UNSUPPORTED ->
+                                            if (g.unsupportedCollapsed) g.onExpandUnsupported() else g.onRetry()
                                         else -> g.onViewAll?.invoke(accent)
                                     }
                                 }
                             }
                         }
-                        1 -> openPicker()
+                        1 -> if (widgetCollapsed) onExpandWidget() else openPicker()
                         else -> {}
                     }
                 }
@@ -268,12 +321,10 @@ fun GamePageScreen(
     }
 
     fun selectTabAndFocus(tab: Int) {
+        // 保存当前 Tab 的内容区焦点，切回时恢复原位（P1.6）
+        tabFocusMemory[selectedTab] = focusIndex
         selectedTab = tab.coerceIn(0, 2)
-        focusIndex = when (selectedTab) {
-            0 -> GPSlots.TAB_DYNAMIC
-            1 -> GPSlots.TAB_STATS
-            else -> GPSlots.TAB_ABOUT
-        }
+        focusIndex = tabFocusMemory[selectedTab].coerceIn(0, lastIndex)
     }
 
     // 左右切游戏：切换后焦点复位到「启动」，触控 ‹ › 与手柄 LT/RT 共用此入口
@@ -299,39 +350,27 @@ fun GamePageScreen(
                 .onKeyEvent { ev ->
                     val n = ev.nativeKeyEvent
                     if (n.action != android.view.KeyEvent.ACTION_DOWN) return@onKeyEvent false
-                    // 震动触感反馈（与子页 subPageKeyHandler 同构）：方向键 / 肩键 / 扳机 = tick，确认 / 返回 / 收藏 = click。
+                    // 统一震动映射（与子页 subPageKeyHandler 同构）：方向键 / 肩键 / 扳机 = tick，确认 / 返回 / 收藏 = click。
+                    hapticFor(n.keyCode)
                     when (n.keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP,
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_DOWN,
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_LEFT,
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_RIGHT,
-                        android.view.KeyEvent.KEYCODE_BUTTON_L1, android.view.KeyEvent.KEYCODE_BUTTON_R1,
-                        android.view.KeyEvent.KEYCODE_BUTTON_L2, android.view.KeyEvent.KEYCODE_BUTTON_R2 -> Haptics.tick()
-                        android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER,
-                        android.view.KeyEvent.KEYCODE_BUTTON_A, android.view.KeyEvent.KEYCODE_BUTTON_B,
-                        android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_BUTTON_X -> Haptics.click()
-                    }
-                    when (n.keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_UP,
-                        android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP -> {
+                        GPKey.UP, GPKey.UP_SYS -> {
                             focusIndex = (focusIndex - 1).coerceAtLeast(0); true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
-                        android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_DOWN -> {
+                        GPKey.DOWN, GPKey.DOWN_SYS -> {
                             focusIndex = (focusIndex + 1).coerceAtMost(lastIndex); true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
-                        android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_LEFT -> {
+                        GPKey.LEFT, GPKey.LEFT_SYS -> {
                             val next = when {
                                 focusIndex == GPSlots.LAUNCH ->
-                                    GPSlots.FAVORITE
-                                focusIndex in GPSlots.BACK..GPSlots.FAVORITE ->
+                                    GPSlots.SHORTCUT
+                                focusIndex in GPSlots.BACK..GPSlots.SHORTCUT ->
                                     (focusIndex - 1).coerceAtLeast(GPSlots.BACK)
                                 focusIndex in GPSlots.TAB_DYNAMIC..GPSlots.TAB_ABOUT ->
                                     GPSlots.LAUNCH
-                                // 截图画廊：左摇杆/方向键左移逐张聚焦；首张再左移则退出画廊
-                                // （横屏回启动钮 / 竖屏回 Tab），避免与"逐张切换"语义冲突。
-                                selectedTab == 0 && focusIndex == GPSlots.CONTENT_START && galleryItemCount > 0 -> {
+                                // 截图画廊：左移逐张聚焦；首张再左移则退出画廊（横屏回启动钮 / 竖屏回 Tab）。
+                                // "画廊是否可退出"的判定内聚于 ScreenshotGalleryState.hasFocusableContent（审计 4.4）。
+                                selectedTab == 0 && focusIndex == GPSlots.CONTENT_START &&
+                                    screenshotGallery?.hasFocusableContent == true -> {
                                     if (gallerySel > 0) { gallerySel -= 1; focusIndex }
                                     else (if (multiColumn) GPSlots.LAUNCH else GPSlots.TAB_ABOUT)
                                 }
@@ -341,17 +380,17 @@ fun GamePageScreen(
                             }
                             focusIndex = next; true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
-                        android.view.KeyEvent.KEYCODE_SYSTEM_NAVIGATION_RIGHT -> {
+                        GPKey.RIGHT, GPKey.RIGHT_SYS -> {
                             val next = when {
-                                focusIndex in GPSlots.BACK..GPSlots.FAVORITE ->
+                                focusIndex in GPSlots.BACK..GPSlots.SHORTCUT ->
                                     (focusIndex + 1).coerceAtMost(GPSlots.LAUNCH)
                                 focusIndex == GPSlots.LAUNCH ->
                                     GPSlots.TAB_DYNAMIC
                                 multiColumn && focusIndex in GPSlots.LAUNCH..GPSlots.TAB_ABOUT && contentCount > 0 ->
                                     GPSlots.CONTENT_START
-                                // 截图画廊：左摇杆/方向键右移逐张聚焦；末张（查看全部）再右移进入下一内容项（个性化面板）。
-                                selectedTab == 0 && focusIndex == GPSlots.CONTENT_START && galleryItemCount > 0 -> {
+                                // 截图画廊：右移逐张聚焦；末张（查看全部）再右移进入下一内容项（个性化面板）。
+                                selectedTab == 0 && focusIndex == GPSlots.CONTENT_START &&
+                                    screenshotGallery?.hasFocusableContent == true -> {
                                     val g = galleryItemCount.coerceAtLeast(1)
                                     if (gallerySel < g - 1) { gallerySel += 1; focusIndex }
                                     else (if (contentCount > 1) GPSlots.CONTENT_START + 1 else focusIndex)
@@ -362,20 +401,17 @@ fun GamePageScreen(
                             }
                             focusIndex = next; true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                        android.view.KeyEvent.KEYCODE_ENTER,
-                        android.view.KeyEvent.KEYCODE_BUTTON_A -> {
-                            // 截图画廊：左摇杆逐张聚焦后直接 A 打开当前选中的截图纸贴 / 查看全部
-                            // （不再需要"武装"二次按键；选中态由 focusIndex==CONTENT_START 驱动）。
+                        GPKey.CENTER, GPKey.ENTER, GPKey.A -> {
+                            // 截图画廊：逐张聚焦后直接 A 打开当前选中的截图纸贴 / 查看全部（选中态由 focusIndex==CONTENT_START 驱动）。
                             activate(focusIndex)
                             true
                         }
-                        android.view.KeyEvent.KEYCODE_BUTTON_X -> { onToggleFavorite(); true }
-                        android.view.KeyEvent.KEYCODE_BACK,
-                        android.view.KeyEvent.KEYCODE_BUTTON_B -> {
-                            // 截图画廊聚焦时 B=退出画廊聚焦（复位 gallerySel、焦点退回启动钮/Tab），
-                            // 而非直接关闭整个 GamePage；其余场景保持 B=返回关闭。
-                            if (selectedTab == 0 && focusIndex == GPSlots.CONTENT_START && galleryItemCount > 0) {
+                        GPKey.X -> { onToggleFavorite(); true }
+                        GPKey.BACK, GPKey.B -> {
+                            // 画廊聚焦时 B=退出画廊聚焦（复位 gallerySel、焦点退回启动钮/Tab），而非关闭整个 GamePage；
+                            // "画廊此刻是否应被 B 退出"由 ScreenshotGalleryState 判定（审计 4.4），其余场景保持 B=返回关闭。
+                            if (selectedTab == 0 && focusIndex == GPSlots.CONTENT_START &&
+                                screenshotGallery?.hasFocusableContent == true) {
                                 gallerySel = 0
                                 focusIndex = if (multiColumn) GPSlots.LAUNCH else GPSlots.TAB_DYNAMIC
                             } else {
@@ -383,11 +419,11 @@ fun GamePageScreen(
                             }
                             true
                         }
-                        android.view.KeyEvent.KEYCODE_BUTTON_Y -> { onOpenArt(accent); true }
-                        android.view.KeyEvent.KEYCODE_BUTTON_L1 -> { switchTab(-1); true }
-                        android.view.KeyEvent.KEYCODE_BUTTON_R1 -> { switchTab(1); true }
-                        android.view.KeyEvent.KEYCODE_BUTTON_L2 -> { doSwitch(-1); true }
-                        android.view.KeyEvent.KEYCODE_BUTTON_R2 -> { doSwitch(1); true }
+                        GPKey.Y -> { onOpenArt(accent); true }
+                        GPKey.LB -> { switchTab(-1); true }
+                        GPKey.RB -> { switchTab(1); true }
+                        GPKey.LT -> { doSwitch(-1); true }
+                        GPKey.RT -> { doSwitch(1); true }
                         else -> false
                     }
                 }
@@ -428,6 +464,8 @@ fun GamePageScreen(
                     screenshotGallery = screenshotGallery,
                     gallerySel = gallerySel,
                     onActiveListState = onActiveListState,
+                    widgetCollapsed = widgetCollapsed,
+                    onExpandWidget = onExpandWidget,
                     reduceMotion = reduceMotion
                 )
             }

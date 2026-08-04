@@ -1,6 +1,8 @@
 package cn.mocabolka.run.ui.components
 
-import android.content.res.Configuration
+import cn.mocabolka.run.ui.theme.deviceProfile
+import cn.mocabolka.run.ui.theme.focusCardVisual
+import cn.mocabolka.run.ui.theme.rememberStaggeredEntrance
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -113,23 +115,14 @@ fun AppListItem(
     // 3. [skipEntrance] 由 AppList 根据 LazyListState.isScrollInProgress 控制，
     //    快速滚动时跳过入场延迟 + 动画立即到位，松手后新出现的项正常执行入场。
     // reduceMotion 时立即到位。
-    var appeared by remember(entranceKey) { mutableStateOf(reduceMotion || skipEntrance) }
-    LaunchedEffect(entranceKey) {
-        if (reduceMotion || skipEntrance) { appeared = true; return@LaunchedEffect }
-        appeared = false
-        val delayMs = MotionSpec.staggerDelay(entranceIndex, perMs = 8, maxMs = 160)
-        if (delayMs > 0) delay(delayMs)
-        appeared = true
-    }
-    val entAlpha by animateFloatAsState(
-        targetValue = if (appeared) 1f else 0f,
-        animationSpec = MotionSpec.Fast,
-        label = "itemAlpha"
-    )
-    val entY by animateFloatAsState(
-        targetValue = if (appeared) 0f else 12f,
-        animationSpec = MotionSpec.Fast,
-        label = "itemY"
+    val (entAlpha, entY) = rememberStaggeredEntrance(
+        entranceIndex = entranceIndex,
+        entranceKey = entranceKey,
+        reduceMotion = reduceMotion,
+        skipEntrance = skipEntrance,
+        perMs = 8,
+        maxMs = 160,
+        startOffsetY = 12f
     )
 
     val scale by animateFloatAsState(
@@ -151,7 +144,7 @@ fun AppListItem(
     // 竖屏模式：列表项宽度有限，名称优先完整显示——隐藏"上次游玩"与"今日时长"两列
     // （这两列各占 90/72dp，会把 weight(1f) 的名称列压到几乎不可见）；
     // 横屏/宽屏空间充足，保留全部信息列。
-    val isPortrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+    val isPortrait = LocalConfiguration.current.deviceProfile.isPortrait
 
     // 收藏星标弹跳（成为收藏时 pop）
     var favPulse by remember { mutableStateOf(false) }
@@ -179,15 +172,11 @@ fun AppListItem(
                 .graphicsLayer { alpha = entAlpha; translationY = entY }
                 .scale(scale)
                 .clip(RoundedCornerShape(Dimens.TileCornerRadius))
-                .background(
-                    if (focused) SurfaceTokens.focusBg()
-                    else MaterialTheme.colorScheme.surface
-                )
-                .border(
-                    width = if (focused) Dimens.FocusBorderWidthSelected else 0.dp,
-                    color = if (focused) MaterialTheme.colorScheme.primary
-                            else Color.Transparent,
-                    shape = RoundedCornerShape(Dimens.TileCornerRadius)
+                .focusCardVisual(
+                    focused = focused,
+                    shape = RoundedCornerShape(Dimens.TileCornerRadius),
+                    borderWidth = Dimens.FocusBorderWidthSelected,
+                    cardColor = MaterialTheme.colorScheme.surface
                 )
                 .focusable(interactionSource = interactionSource)
                 .onFocusChanged { if (it.isFocused) onFocus() }
@@ -206,7 +195,7 @@ fun AppListItem(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(Dimens.RadiusLg))
                     .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Strong)),
                 contentAlignment = Alignment.Center
             ) {
@@ -216,7 +205,7 @@ fun AppListItem(
                         contentDescription = app.label,
                         modifier = Modifier
                             .size(40.dp)
-                            .clip(RoundedCornerShape(8.dp)),
+                            .clip(RoundedCornerShape(Dimens.RadiusMd)),
                         contentScale = ContentScale.Fit
                     )
                 }
@@ -294,7 +283,7 @@ fun AppListItem(
                     Box(
                         modifier = Modifier
                             .size(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
+                            .clip(RoundedCornerShape(Dimens.RadiusXs))
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                     )
                     Text(

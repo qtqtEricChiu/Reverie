@@ -35,7 +35,6 @@ class RecentsRepository(private val context: Context) {
         }.getOrNull() ?: return@withContext emptyList()
 
         val user = android.os.Process.myUserHandle()
-        // 外层 runCatching：launcherApps.getActivityList() 在某些定制 ROM 上可能抛异常
         runCatching {
             stats.filter { it.totalTimeInForeground > 0 }
                 .sortedByDescending { it.lastTimeUsed }
@@ -58,6 +57,4 @@ class RecentsRepository(private val context: Context) {
                 }
         }.getOrNull() ?: emptyList()
     }
-
-        // ICON_MAX 统一使用 launcher 包内共享常量（定义于 AppRepository.kt），消除重复定义漂移风险
 }

@@ -68,7 +68,17 @@ fun StatusBar(
     statsTab: Any? = null,
     searchTab: Any? = null,
     settingsTab: Any? = null,
-    showGamepadHints: Boolean = false
+    showGamepadHints: Boolean = false,
+    /** 是否把子 Tab 滑块（速览/使用时长/启动次数/通知历史）渲染到了顶栏下方的子标题行。
+     *  仅横屏 STATS 页为 true；此时 RIGHT 段 RB 键位提示（子 Tab 翻页）才有意义。
+     *  竖屏 STATS 的子 Tab 在 StatsScreen 顶部独立成行、不在顶栏，故顶栏只显示 LT，不显示 RB；
+     *  其他页面（HOME/SEARCH/SETTINGS）同样无子 Tab，只显示 LT。 */
+    showSubTabHint: Boolean = false,
+    /** 子标题栏插槽：横屏下由统计页注入子 Tab 滑块（速览/使用时长/启动次数/通知历史），
+     *  与游戏子页面 `tabInTopBar` 变体一致。独立成行渲染在 StatusBar 主行下方、页面内容之上，
+     *  与主 Tab 行分离、互不抢宽（避免主 Tab 被挤掉）。
+     *  其余页面/竖屏留空（子 Tab 滑块改在页面内独立成行）。 */
+    subHeaderContent: @Composable () -> Unit = {}
 ) {
     var now by remember { mutableStateOf(LocalDateTime.now()) }
     // R13 省电/性能：仅在「分钟边界」刷新，而非每 30 秒强制重组。统一 1 分钟间隔。
@@ -97,17 +107,17 @@ fun StatusBar(
                 .fillMaxWidth()
                 .padding(horizontal = Dimens.ContentHorizontal, vertical = Dimens.xxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(Dimens.sm)
         ) {
-        // 左侧：简洁问候 + 日期（紧凑）
-        // 竖屏窄屏时日期串（"M月d日 星期X"）较长，与右侧滑块争抢空间——
+        // 左侧：页面标题 + 日期（紧凑）
+        // 竖屏窄屏时日期串（"M月d日 星期X"）较长，与中间/右侧滑块争抢空间——
         // 用 weight(1f, fill=false) 约束左侧最大宽度并允许收缩，文本单行省略，
-        // 避免把右侧 Tab 滑块挤出或换行。
+        // 避免把主 Tab 滑块挤出或换行。
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .weight(1f, fill = false)
-                .padding(end = Dimens.sm)
+                .weight(1f, fill = true)
+                .padding(end = Dimens.xs)
         ) {
             Column(verticalArrangement = Arrangement.Center) {
                 Text(
@@ -128,11 +138,23 @@ fun StatusBar(
             }
         }
 
-        // 右侧：四选一滑块（触控左右滑动 + 点击切换）；左右两侧贴 LT / RT 键位提示
+        // 实现「两个 Tab 整体全部右对齐」：
+        // 左侧标题块用 weight(1f, fill=true) 撑满剩余空间，把右侧「子 Tab 滑块 + 主 Tab 滑块」整体顶到最右；
+        // 子 Tab 与主 Tab 之间不插任何弹性 Spacer（紧贴），二者作为一个整体块贴右，最右有内容（主 Tab）。
+        // 注意：此处不再额外加 Spacer(weight=1f)——会破坏左侧标题 fill=true 的撑满，回到"中间偏右、最右无内容"。
+        if (showSubTabHint) {
+            subHeaderContent()
+        }
+
+        // 右侧：四选一主 Tab 滑块（LT 切上一主 Tab / RT 切下一主 Tab）。
+        // 仅横屏 STATS 页（showSubTabHint=true）显示 RB（子 Tab 翻页提示）。
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
         ) {
+            if (showGamepadHints && showSubTabHint) {
+                KeyBadge(text = "RB")
+            }
             if (showGamepadHints) {
                 KeyBadge(text = "LT")
             }
@@ -174,7 +196,11 @@ private fun QuadTabSlider(
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(Dimens.xl))
-            .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Subtle))
+            .background(
+                SurfaceTokens.cardSurfaceGlassAware(
+                    SurfaceTokens.CardLevel.Default
+                )
+            )
             .padding(3.dp)
             // 触控左右滑动切换 Tab
             .pointerInput(tabs) {

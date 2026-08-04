@@ -1,3 +1,6 @@
+import java.util.Base64
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,9 +16,38 @@ android {
         applicationId = "cn.mocabolka.run"
         minSdk = 36
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1.0"
+        // 版本号：CI 从 git tag 注入 VERSION_CODE/VERSION_NAME；本地回退到当前发布值
+        val ciVersionCode = System.getenv("VERSION_CODE")
+        versionCode = ciVersionCode?.toIntOrNull() ?: 10200
+        val ciVersionName = System.getenv("VERSION_NAME")
+        versionName = ciVersionName ?: "1.2.0"
         ndk { abiFilters += listOf("arm64-v8a") }
+    }
+
+    signingConfigs {
+        // 仅在 CI 或本地存在 keystore.properties 时配置 release 签名；否则不影响 debug 构建
+        val hasLocalKeystore = rootProject.file("keystore.properties").exists()
+        if (System.getenv("CI") == "true") {
+            create("release") {
+                val keystoreBase64 = System.getenv("KEYSTORE_BASE64") ?: ""
+                val tmpFile = File.createTempFile("reverie", ".keystore")
+                tmpFile.deleteOnExit()
+                tmpFile.writeBytes(Base64.getDecoder().decode(keystoreBase64.trim()))
+                storeFile = tmpFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        } else if (hasLocalKeystore) {
+            create("release") {
+                val props = Properties()
+                rootProject.file("keystore.properties").inputStream().use { props.load(it) }
+                storeFile = rootProject.file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -26,6 +58,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // release 签名仅在 signingConfigs 含 "release" 时挂载（CI 或本地有 keystore）
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

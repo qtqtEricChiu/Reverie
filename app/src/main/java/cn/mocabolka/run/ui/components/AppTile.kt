@@ -118,11 +118,9 @@ fun AppTile(
                     }
                 )
                 .border(
-                    width = if (effectiveFocused) Dimens.FocusBorderWidthSelected else Dimens.FocusBorderWidth,
+                    width = if (effectiveFocused) Dimens.FocusBorderWidthSelected else 0.dp,
                     color = when {
                         effectiveFocused -> MaterialTheme.colorScheme.primary
-                        isFavorite -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f)
-                        enabled -> MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                         else -> Color.Transparent
                     },
                     shape = RoundedCornerShape(Dimens.TileCornerRadius)

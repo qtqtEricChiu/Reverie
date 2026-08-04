@@ -57,5 +57,7 @@ enum class DialogLayer {
     /** 设置页信息弹窗（InfoDialog） */
     SETTINGS_INFO,
     /** 统计页日期选择器弹窗（NativeDatePickerDialog，原生 Material3 封装） */
-    STATS_DATE_PICKER
+    STATS_DATE_PICKER,
+    /** 应用内更新提示弹窗（UpdateDialog，2026-07-30）：A=立即更新 / B=稍后 / X=跳过此版本 */
+    UPDATE
 }

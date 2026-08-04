@@ -124,7 +124,7 @@ fun ShimmerLoading(reduceMotion: Boolean, modifier: Modifier = Modifier) {
 private fun ShimmerChip(
     modifier: Modifier,
     reduceMotion: Boolean,
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(8.dp)
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(Dimens.RadiusMd)
 ) {
     val density = LocalDensity.current
     val shift = with(density) { 90.dp.toPx() }

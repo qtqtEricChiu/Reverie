@@ -1,0 +1,91 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Extract version from tag
+        run: |
+          # tag 触发取 refs/tags/ 后的版本；手动触发回退到最近 tag
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG=$(git describe --tags --abbrev=0)
+          fi
+          VERSION="${TAG#v}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          # versionCode 由 tag 派生：v1.2.0 -> 1*10000 + 2*100 + 0 = 10200（单调递增）
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build release APK
+        env:
+          CI: true
+          VERSION_NAME: ${{ env.VERSION_NAME }}
+          VERSION_CODE: ${{ env.VERSION_CODE }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Rename APK
+        run: |
+          mv app/build/outputs/apk/release/app-release.apk \
+             "Reverie-${{ env.VERSION_NAME }}-release.apk"
+
+      - name: Create GitHub Release & upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Reverie ${{ env.VERSION_NAME }}"
+          files: "Reverie-${{ env.VERSION_NAME }}-release.apk"
+          generate_release_notes: true
+
+      - name: Generate version.json
+        run: |
+          mkdir -p update
+          cat > update/version.json << 'EOF'
+          {
+            "version": "${{ env.TAG }}",
+            "versionCode": ${{ env.VERSION_CODE }},
+            "changelog": "详见 GitHub Releases 页面",
+            "downloadUrl": "${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ env.TAG }}"
+          }
+          EOF
+
+      - name: Commit version.json to main
+        run: |
+          git fetch origin main
+          git switch main
+          git pull origin main
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update/version.json
+          git commit -m "chore: update version.json to ${{ env.TAG }}" || true
+          git push origin main

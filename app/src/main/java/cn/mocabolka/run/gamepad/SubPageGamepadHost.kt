@@ -45,6 +45,8 @@ class SubPageGamepadHost(
     private val lastRightStickAt = MutableStateFlow(0L)
     private var scrollJob: Job? = null
     private lateinit var manager: GamepadManager
+    /** 右摇杆焦点回写去重：相同首可视项索引不重复触发 onFocusSync，避免 Compose 侧 LaunchedEffect 反复重启（P2.1）。 */
+    private var lastSyncedIdx = -1
 
     fun start() {
         // 直接复用 MainActivity 的归一化引擎（同一类、同一真源）。
@@ -79,7 +81,11 @@ class SubPageGamepadHost(
                 val delta = physics.step(dt, rightStickY.value)
                 if (delta != 0f) {
                     getState().scrollBy(delta)
-                    onFocusSync?.invoke(getFirstVisibleItemIndex())
+                    val idx = getFirstVisibleItemIndex()
+                    if (idx != lastSyncedIdx) {
+                        lastSyncedIdx = idx
+                        onFocusSync?.invoke(idx)
+                    }
                 }
                 delay(RightStickScroll.FRAME_DELAY_MS)
             }

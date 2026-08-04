@@ -51,8 +51,7 @@
             android:exported="true"
             android:screenOrientation="unspecified"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
-            android:launchMode="singleTask"
-            android:alwaysRetainTaskState="true"
+            android:launchMode="singleTop"
             android:excludeFromRecents="false"
             android:resumeWhilePausing="true"
             android:theme="@style/Theme.Launcher.Starting">
@@ -79,6 +78,14 @@
             android:theme="@style/Theme.Launcher"
             android:parentActivityName=".MainActivity" />
 
+        <!-- 通知历史钻取页：独立 Activity，从通知统计 Tab 进入（按应用 / 发件人筛选的具体通知列表；全屏 + 统一子页观感） -->
+        <activity
+            android:name=".ui.NotificationHistoryActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
+            android:theme="@style/Theme.Launcher" />
+
         <!-- 开放源代码许可页：独立 Activity，从 AboutActivity 进入 -->
         <activity
             android:name=".ui.LicensesActivity"
@@ -88,10 +95,11 @@
             android:theme="@style/Theme.Launcher"
             android:parentActivityName=".ui.AboutActivity" />
 
-        <!-- 游戏专属页面：独立 Activity（参考 Steam 大屏幕游戏库-游戏界面），仅主页进入 -->
+        <!-- 游戏专属页面：独立 Activity（参考 Steam 大屏幕游戏库-游戏界面），主页进入；
+             exported=true 供桌面固定的游戏快捷方式（ShortcutHelper）直接拉起 -->
         <activity
             android:name=".ui.game.GamePageActivity"
-            android:exported="false"
+            android:exported="true"
             android:screenOrientation="unspecified"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|orientation|density"
             android:theme="@style/Theme.Launcher"

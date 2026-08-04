@@ -1,67 +1,79 @@
 package cn.mocabolka.run.ui.game
 
-import cn.mocabolka.run.ui.components.BottomFadeMask
-import cn.mocabolka.run.ui.components.statusBarSafeTop
-
+import android.appwidget.AppWidgetHostView
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.widget.FrameLayout
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddToHomeScreen
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Label
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.outlined.StarOutline
-import androidx.compose.material3.Icon
-import cn.mocabolka.run.ui.components.ReverieIconButton
-import cn.mocabolka.run.ui.components.SubPageBackButton
-import cn.mocabolka.run.ui.components.ReverieFilledButton
-import cn.mocabolka.run.ui.SettingsRepository
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -72,78 +84,60 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import android.appwidget.AppWidgetHostView
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.drawable.BitmapDrawable
-import android.widget.FrameLayout
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import cn.mocabolka.run.launcher.AppModel
 import cn.mocabolka.run.launcher.formatDuration
-import cn.mocabolka.run.ui.components.GamepadHintBar
+import cn.mocabolka.run.ui.SettingsRepository
+import cn.mocabolka.run.ui.components.BottomFadeMask
 import cn.mocabolka.run.ui.components.GamepadBottomHintBar
-import cn.mocabolka.run.ui.components.Hint
 import cn.mocabolka.run.ui.components.GamepadVisible
+import cn.mocabolka.run.ui.components.Hint
 import cn.mocabolka.run.ui.components.KeyBadge
 import cn.mocabolka.run.ui.components.KeyToken
+import cn.mocabolka.run.ui.components.ReverieFilledButton
+import cn.mocabolka.run.ui.components.ReverieIconButton
+import cn.mocabolka.run.ui.components.ReverieTextButton
+import cn.mocabolka.run.ui.components.SubPageBackButton
+import cn.mocabolka.run.ui.components.accentOutline
+import cn.mocabolka.run.ui.components.statusBarSafeTop
+import cn.mocabolka.run.ui.game.GamePageVariant.Companion.fromConstraints
+import cn.mocabolka.run.ui.game.steamart.domain.model.LogoPosition
+import cn.mocabolka.run.ui.theme.DeviceProfile
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.FavoriteStar
+import cn.mocabolka.run.ui.theme.LocalAmoledPureBlack
+import cn.mocabolka.run.ui.theme.MotionMachines
 import cn.mocabolka.run.ui.theme.SurfaceCard
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 import cn.mocabolka.run.ui.theme.focusBorder
-import cn.mocabolka.run.ui.theme.MotionMachines
-import cn.mocabolka.run.ui.theme.MotionSpec
-import cn.mocabolka.run.ui.game.steamart.domain.model.LogoPosition
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.focusGroup
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.Spring
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -239,11 +233,11 @@ enum class GamePageVariant {
         fun fromConstraints(maxWidthDp: Int, maxHeightDp: Int): GamePageVariant {
             val landscape = maxWidthDp >= maxHeightDp
             return when {
-                !landscape && maxWidthDp < 600 -> CompactPortrait
+                !landscape && maxWidthDp < DeviceProfile.PHONE_MAX_DP -> CompactPortrait
                 !landscape -> MediumPortrait
-                landscape && maxWidthDp < 840 -> CompactLandscape
+                landscape && maxWidthDp < DeviceProfile.EXPANDED_MIN_DP -> CompactLandscape
                 landscape && maxWidthDp < 1200 -> MediumLandscape
-                landscape && maxWidthDp < 1600 -> ExpandedLandscape
+                landscape && maxWidthDp < DeviceProfile.TV_MIN_DP -> ExpandedLandscape
                 else -> ExtraLargeLandscape
             }
         }
@@ -261,22 +255,24 @@ object GPSlots {
     const val APP_INFO = 1
     const val THEME = 2
     const val FAVORITE = 3
-    const val LAUNCH = 4
-    const val TAB_DYNAMIC = 5
-    const val TAB_STATS = 6
-    const val TAB_ABOUT = 7
-    const val CONTENT_START = 8
+    /** 固定到桌面（游戏快捷方式），位于收藏之后。 */
+    const val SHORTCUT = 4
+    const val LAUNCH = 5
+    const val TAB_DYNAMIC = 6
+    const val TAB_STATS = 7
+    const val TAB_ABOUT = 8
+    const val CONTENT_START = 9
 }
 
 /**
  * 当前 Tab 的可聚焦内容项数量（用于焦点索引上界与滚动）。
  * - 动态：截图画廊（1 项，可聚焦：左/右选图、A 打开）+ 个性化 widget 面板（personalizationCount 项）；
- * - 统计：日期时间线行（可聚焦）+ 趋势概览（装饰）→ daySeries.size；
+ * - 统计：时长趋势概览（可聚焦）+ 日期时间线行（可聚焦）→ daySeries.size + 1；
  * - 关于：4 项。
  */
 fun contentItemCount(data: GamePageData, tab: Int, personalizationCount: Int = 0, galleryCount: Int = 0): Int = when (tab) {
     0 -> galleryCount + personalizationCount
-    1 -> data.daySeries.size
+    1 -> data.daySeries.size + 1
     2 -> 4
     else -> 0
 }
@@ -405,6 +401,9 @@ fun GamePageBody(
     gallerySel: Int = 0,
     /** 当前激活 Tab 内容列表状态上报（供 Activity 右摇杆引擎驱动）。 */
     onActiveListState: (androidx.compose.foundation.lazy.LazyListState) -> Unit = {},
+    /** 社区 App 均未安装时是否收折（按游戏记忆）；收折态整行可点展开。 */
+    widgetCollapsed: Boolean = false,
+    onExpandWidget: () -> Unit = {},
     reduceMotion: Boolean = false
 ) {
     val pad = variant.screenPadding
@@ -421,12 +420,18 @@ fun GamePageBody(
     // 折叠态用 Animatable：下滑 snapTo 立即跟手收窄，到顶 animateTo(0f) 直接弹到底（无视力度，spring 收尾微弹）。
     // 切游戏（appPkg 变）通过 remember key 重建 Animatable(0f) 自动归零，避免上一款残留折叠态。
     val collapseAnim = remember(data.app.packageName) { Animatable(0f) }
+    // restore 进行中标记：防止 onPreScroll 的 snapTo 打断正在运行的弹回动画（见下方竞争处理）。
+    val isRestoring = remember(data.app.packageName) { mutableStateOf(false) }
     val scrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(
                 available: Offset, source: NestedScrollSource
             ): Offset {
-                if (source == NestedScrollSource.Drag && available.y < 0) {
+                // 接受 Drag 与 Fling：惯性滚动（fling）期间也要让 banner 跟手收窄，否则松手后折叠态卡住。
+                // 恢复动画进行中不干涉，避免 snapTo 取消正在跑的 animateTo(0f) 导致 banner 停在半路。
+                val isUserScroll =
+                    source == NestedScrollSource.Drag || source == NestedScrollSource.Fling
+                if (isUserScroll && available.y < 0 && !isRestoring.value) {
                     // 手指下滑 → snapTo 立即跟手收窄
                     scope.launch {
                         collapseAnim.snapTo(
@@ -442,12 +447,21 @@ fun GamePageBody(
             ): Offset {
                 // 主体列表已到顶（首 item 在顶端、无偏移）→ 立即弹回全高，无需再额外上滑一下。
                 // 关键：用「列表到顶」判定而非 available.y>0（后者需到顶后再滑一下才有剩余量 → 两下）。
-                // collapseAnim.value>0.5f 避免列表本就全展开时每帧重复 launch animateTo。
+                // 接受 Drag 与 Fling：惯性滚动（fling）回顶也要触发恢复（P0 主因）。
+                // 阈值改用 collapseMaxPx*0.05f：展开不足 95% 才触发恢复，全展开时（≈0）本就跳过，
+                // 同时避免在轻微浮差（<5%）上每帧重复 launch animateTo。
+                // isRestoring 守卫：恢复动画进行中不再重复 launch。
                 val atTop = bodyListState?.let {
                     it.firstVisibleItemIndex == 0 && it.firstVisibleItemScrollOffset == 0
                 } == true
-                if (source == NestedScrollSource.Drag && atTop && collapseAnim.value > 0.5f) {
-                    scope.launch { collapseAnim.animateTo(0f) }
+                val isUserScroll =
+                    source == NestedScrollSource.Drag || source == NestedScrollSource.Fling
+                if (isUserScroll && atTop && collapseAnim.value > collapseMaxPx * 0.05f && !isRestoring.value) {
+                    isRestoring.value = true
+                    scope.launch {
+                        collapseAnim.animateTo(0f)
+                        isRestoring.value = false
+                    }
                 }
                 return Offset.Zero
             }
@@ -548,7 +562,8 @@ fun GamePageBody(
                 availableProviders = availableProviders, widgetVersion = widgetVersion,
                 onPickWidgetProvider = onPickWidgetProvider,
                 widgetLoading = widgetLoading,
-                screenshotGallery = screenshotGallery
+                screenshotGallery = screenshotGallery,
+                widgetCollapsed = widgetCollapsed, onExpandWidget = onExpandWidget
             )
         } else {
             LandscapeBody(
@@ -561,7 +576,8 @@ fun GamePageBody(
                 availableProviders = availableProviders, widgetVersion = widgetVersion,
                 onPickWidgetProvider = onPickWidgetProvider,
                 widgetLoading = widgetLoading,
-                screenshotGallery = screenshotGallery
+                screenshotGallery = screenshotGallery,
+                widgetCollapsed = widgetCollapsed, onExpandWidget = onExpandWidget
             )
         }
 
@@ -610,7 +626,7 @@ private fun TopBar(
                 Text(
                     text = "${gameIndex + 1}/$gameCount",
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.9f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
                     modifier = Modifier.padding(horizontal = Dimens.xs)
                 )
             }
@@ -624,7 +640,7 @@ private fun TopBar(
             Text(
                 text = data.displayName,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = Color.White.copy(alpha = 0.95f),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.95f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
@@ -683,6 +699,20 @@ private fun TopBar(
                 tint = if (data.isFavorite) FavoriteStar else data.accent
             )
         }
+
+        Spacer(Modifier.width(Dimens.xs))
+
+        // 固定到桌面（游戏快捷方式：点击后先展示游戏页再自动启动）
+        Box {
+            ReverieIconButton(
+                onClick = { onActivate(GPSlots.SHORTCUT) },
+                imageVector = Icons.Filled.AddToHomeScreen,
+                contentDescription = "固定到桌面",
+                focused = focusIndex == GPSlots.SHORTCUT,
+                focusColor = data.accent,
+                tint = data.accent
+            )
+        }
     }
 }
 
@@ -711,9 +741,14 @@ private fun HeroBanner(
     // 切游戏时 appPkg 变化 → 重新读取该游戏的已保存选择。
     val context = LocalContext.current
     val bannerSettings = remember { SettingsRepository(context) }
-    var showHeader by remember(appPkg) {
-        mutableStateOf(appPkg.isNotBlank() && bannerSettings.isBannerHeader(appPkg))
-    }
+            var showHeader by remember(appPkg) {
+                mutableStateOf(appPkg.isNotBlank() && bannerSettings.isBannerHeader(appPkg))
+            }
+            // 响应式：跨游戏切回 / 外部变更（如设置项、对话返回）即时同步版式，无需重入 HeroBanner。
+            val bannerSet by bannerSettings.bannerHeaderFlow.collectAsState()
+            LaunchedEffect(appPkg, bannerSet) {
+                showHeader = appPkg.isNotBlank() && bannerSet.contains(appPkg)
+            }
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
@@ -1082,11 +1117,7 @@ private fun GamePageTabs(
                         else if (focused) GamePageColors.tonal(accent, 0.10f)
                         else Color.Transparent
                     )
-                        .then(
-                            if (focused) Modifier.border(
-                                variantBorderWidth(gamepadConnected), accent, MaterialTheme.shapes.medium
-                            ) else Modifier
-                        )
+                        .focusBorder(focused, accent, MaterialTheme.shapes.medium)
                         .clickable { onActivate(slot) }
                         .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
@@ -1095,7 +1126,9 @@ private fun GamePageTabs(
                         text = label,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                        color = if (selected) GamePageColors.onAccent(accent)
+                        // 选中文本：随主题深浅联动（MaterialTheme 在上层已按 lc 强制 onSurface=White），
+                        // 避免浅色 accent.onAccent→Black 在深色模式下黑底难读；pill 背景（accent 取色）已足够标识选中。
+                        color = if (selected) MaterialTheme.colorScheme.onSurface
                                 else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -1114,9 +1147,6 @@ private fun tabSlot(i: Int): Int = when (i) {
 }
 
 private val GP_TABS = listOf("动态", "统计", "关于")
-
-private fun variantBorderWidth(gamepadConnected: Boolean): Dp =
-    if (gamepadConnected) Dimens.FocusBorderWidthSelected else 0.dp
 
 // ─────────────────────────────────────────────────────────────
 // 结构骨架：竖屏（Compact / Medium Portrait）
@@ -1139,6 +1169,8 @@ private fun PortraitBody(
     onPickWidgetProvider: (String, WidgetProviderItem) -> Unit = { _, _ -> },
     screenshotGallery: GameScreenshots.ScreenshotGalleryState? = null,
     gallerySel: Int = 0,
+    widgetCollapsed: Boolean = false,
+    onExpandWidget: () -> Unit = {},
 
 ) {
     Column(modifier = modifier.fillMaxSize()) {
@@ -1161,7 +1193,7 @@ private fun PortraitBody(
                             .width(variant.capsuleWidth)
                             .aspectRatio(2f / 3f)
                             .clip(RoundedCornerShape(Dimens.RadiusLg))
-                            .border(Dimens.FocusBorderWidth, GamePageColors.tonal(data.accent, 0.30f), RoundedCornerShape(Dimens.RadiusLg))
+                            .accentOutline(GamePageColors.tonal(data.accent, 0.30f), RoundedCornerShape(Dimens.RadiusLg))
                     )
                 } else {
                     // 无美术海报时改用本机应用 icon（替代原文字头像）
@@ -1172,13 +1204,13 @@ private fun PortraitBody(
                         modifier = Modifier
                             .size(64.dp)
                             .clip(RoundedCornerShape(Dimens.RadiusLg))
-                            .border(Dimens.FocusBorderWidth, GamePageColors.tonal(data.accent, 0.30f), RoundedCornerShape(Dimens.RadiusLg))
+                            .accentOutline(GamePageColors.tonal(data.accent, 0.30f), RoundedCornerShape(Dimens.RadiusLg))
                     )
                 }
                 Text(
                     text = data.displayName,
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1264,6 +1296,8 @@ private fun LandscapeBody(
     onPickWidgetProvider: (String, WidgetProviderItem) -> Unit = { _, _ -> },
     screenshotGallery: GameScreenshots.ScreenshotGalleryState? = null,
     gallerySel: Int = 0,
+    widgetCollapsed: Boolean = false,
+    onExpandWidget: () -> Unit = {},
 
 ) {
     Row(
@@ -1343,7 +1377,8 @@ private fun LandscapeBody(
                     onPickWidgetProvider = onPickWidgetProvider,
                     widgetLoading = widgetLoading,
                     screenshotGallery = screenshotGallery,
-                    gallerySel = gallerySel
+                    gallerySel = gallerySel,
+                    widgetCollapsed = widgetCollapsed, onExpandWidget = onExpandWidget
                 )
             }
         }
@@ -1395,8 +1430,7 @@ private fun GameLeftRail(
                         )
                         .clip(RoundedCornerShape(Dimens.RadiusLg))
                         .background(SurfaceTokens.cardSurface(SurfaceTokens.CardLevel.Default))
-                        .border(
-                            Dimens.FocusBorderWidth,
+                        .accentOutline(
                             GamePageColors.tonal(data.accent, 0.35f),
                             RoundedCornerShape(Dimens.RadiusLg)
                         )
@@ -1552,6 +1586,9 @@ private fun TabContent(
     screenshotGallery: GameScreenshots.ScreenshotGalleryState? = null,
     /** 焦点机：截图画廊内选中的截图纸贴序号（左/右在画廊内切换）。 */
     gallerySel: Int = 0,
+    /** 社区 App 均未安装时是否收折（按游戏记忆）；收折态整行可点展开。 */
+    widgetCollapsed: Boolean = false,
+    onExpandWidget: () -> Unit = {},
 
 ) {
     // 每个 Tab 独立持有列表状态（AnimatedContent 切换时互不打扰右摇杆滚动）。
@@ -1611,7 +1648,9 @@ private fun TabContent(
                         onPickWidgetProvider = onPickWidgetProvider,
                         focused = focusIndex == contentBase + 1,
                         onActivate = onActivate,
-                        screenPadding = variant.screenPadding
+                        screenPadding = variant.screenPadding,
+                        widgetCollapsed = widgetCollapsed,
+                        onExpandWidget = onExpandWidget
                     )
                 }
             }
@@ -1625,15 +1664,22 @@ private fun TabContent(
                     }
                 }
             } else {
-                // 时长趋势概览置于最上
-                item { TrendSummary(data = data, variant = variant) }
+                // 时长趋势概览置于最上（可聚焦，slot = contentBase + 0）
+                item {
+                    TrendSummary(
+                        data = data,
+                        variant = variant,
+                        focused = focusIndex == contentBase,
+                        onActivate = { onActivate(contentBase) }
+                    )
+                }
                 val max = (series.maxOrNull() ?: 0L).coerceAtLeast(1L)
                 // 逆序展示：displayOrder[0] = 今天（原末位索引），越远越在下
                 val seriesList = series.toList()
                 val displayOrder = List(series.size) { series.size - 1 - it }
                 itemsIndexed(displayOrder, key = { _, origIndex -> origIndex }) { j, origIndex ->
                     val ms = seriesList[origIndex]
-                    val slot = contentBase + j
+                    val slot = contentBase + 1 + j
                     TimelineRow(
                         index = origIndex,
                         total = series.size,
@@ -1761,6 +1807,72 @@ private fun AboutRow(
 }
 
 /**
+ * 统一「收折成一行」入口行：截图区（初始化无哈希后缀 UNSUPPORTED）与
+ * Widget 区（社区 App 均未安装）共用同一样式，保证两种收折态视觉一致。
+ * 保持按钮形状：SurfaceCard + 全行可点 + 手柄焦点框；左侧图标 + 标题，右侧短提示 + 箭头。
+ */
+@Composable
+internal fun CollapsedSectionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    hint: String,
+    accent: Color,
+    focused: Boolean = false,
+    trailing: androidx.compose.ui.graphics.vector.ImageVector = Icons.Filled.KeyboardArrowRight,
+    modifier: Modifier = Modifier,
+    /** 整行点击（用于「收折行 → 展开」）。为 null 时整行不可点（由右侧按钮承接操作）。 */
+    onClick: (() -> Unit)? = null,
+    /** 右侧操作按钮文案；非空时渲染按钮并取代箭头图标（整行不再可点）。 */
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    SurfaceCard(
+        level = if (focused) SurfaceTokens.CardLevel.Default else SurfaceTokens.CardLevel.Subtle,
+        shape = Dimens.RadiusLg,
+        modifier = modifier.focusBorder(focused, accent, RoundedCornerShape(Dimens.RadiusLg))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = onClick != null, onClick = { onClick?.invoke() })
+                .padding(horizontal = Dimens.CardInnerPadding, vertical = Dimens.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(Dimens.IconMd))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (actionLabel != null && onAction != null) {
+                ReverieFilledButton(
+                    onClick = onAction,
+                    accent = accent,
+                    text = actionLabel,
+                    focused = focused
+                )
+            } else {
+                Icon(
+                    trailing,
+                    contentDescription = null,
+                    tint = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium),
+                    modifier = Modifier.size(Dimens.IconMd)
+                )
+            }
+        }
+    }
+}
+
+/**
  * 个性化内容面板：支持绑定一个第三方 Widget。
  * - 米游社发行游戏：候选包为 米游社 [com.mihoyo.hyperion] + TapTap [com.taptap]，同时展示两款应用供选择；
  * - 其它游戏：仅 TapTap [com.taptap]。
@@ -1781,6 +1893,10 @@ private fun PersonalizationWidgetPanel(
     focused: Boolean = false,
     /** 焦点机激活回调（与 TimelineRow 同构）：A/Enter 触发，统一走 GamePageScreen.activate。 */
     onActivate: (Int) -> Unit = {},
+    /** 社区 App 均未安装时是否收折（按游戏记忆）；收折态整行可点展开。 */
+    widgetCollapsed: Boolean = false,
+    /** 收折态整行点击 → 展开。 */
+    onExpandWidget: () -> Unit = {},
     screenPadding: Dp = 0.dp,
     loading: Boolean = false,
 ) {
@@ -1812,13 +1928,32 @@ private fun PersonalizationWidgetPanel(
     // 已安装候选包（米游社发行游戏可能为 2：mihoyo + taptap；其它仅 taptap）。
     val installedSlots = slots.filter { it.isInstalled }
     if (installedSlots.isEmpty()) {
-        // 有候选社区 App 但未安装：给一句引导，避免整块消失却无说明
+        // 有候选社区 App 但未安装：收折成一行（与截图区同构，保持一行）。
+        // 收折态整行可点展开；展开态左文字提示 + 右「绑定其它 Widget」按钮（点击经 activate → openPicker 兜底）。
         if (slots.isNotEmpty()) {
-            Text(
-                text = "安装对应社区 App 后，可在此绑定其 Widget",
-                style = MaterialTheme.typography.labelSmall,
-                color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium)
-            )
+            if (widgetCollapsed) {
+                CollapsedSectionRow(
+                    icon = Icons.Filled.Widgets,
+                    title = "个性化内容",
+                    hint = "未安装 · 点击展开",
+                    accent = accent,
+                    focused = focused,
+                    trailing = Icons.Filled.KeyboardArrowDown,
+                    modifier = modifier,
+                    onClick = onExpandWidget
+                )
+            } else {
+                CollapsedSectionRow(
+                    icon = Icons.Filled.Widgets,
+                    title = "个性化内容",
+                    hint = "安装对应社区 App 后可在此绑定其 Widget",
+                    accent = accent,
+                    focused = focused,
+                    modifier = modifier,
+                    actionLabel = "绑定其它 Widget",
+                    onAction = { onActivate(GPSlots.CONTENT_START + 1) }
+                )
+            }
         }
         return
     }
@@ -2167,7 +2302,7 @@ private fun WidgetProviderCard(
                 Text(
                     text = provider.label,
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = Color.White.copy(alpha = 0.92f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -2206,7 +2341,7 @@ private fun AppIconImage(
         Box(modifier = modifier.background(accent.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
             Text(
                 text = name.firstOrNull()?.toString().orEmpty(),
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
             )
         }
@@ -2233,6 +2368,9 @@ private fun ScreenshotGallery(
 ) {
     val state = gallery?.setupState ?: GameScreenshots.SetupState.READY
     val shots = gallery?.screenshots ?: emptyList()
+    // 重置绑定确认框可见态：仅「已绑定截图（READY 且有截图）」时角标可点并弹出确认；
+    // 未初始化 / 初始化阶段（NEED_TREE / NEED_SAMPLE / UNSUPPORTED）点击无反应。
+    var showResetDialog by remember { mutableStateOf(false) }
     // 任务一：超过 5 张时仅展示最新 5 张，并在第 6 位放置"查看全部"入口。
     val showViewAll = shots.size > 5 && gallery?.onViewAll != null
     val displayShots = if (showViewAll) shots.take(5) else shots
@@ -2241,6 +2379,20 @@ private fun ScreenshotGallery(
         variant.structure == GPStructure.LAND_3 -> 170.dp
         variant.isPortrait -> 140.dp
         else -> 160.dp
+    }
+    // 「收折成一行」：截图初始化无哈希后缀（UNSUPPORTED）时整块收折为一行按钮（与 Widget 收折行同一样式）。
+    // 点击（触控）或焦点机 A（activate → onExpandUnsupported）展开完整卡片；不点则该应用始终保持一行。
+    if (state == GameScreenshots.SetupState.UNSUPPORTED && gallery?.unsupportedCollapsed == true) {
+        CollapsedSectionRow(
+            icon = Icons.Filled.Image,
+            title = "游戏截图",
+            hint = "不可用 · 点击展开",
+            accent = accent,
+            focused = focused,
+            trailing = Icons.Filled.KeyboardArrowDown,
+            onClick = gallery.onExpandUnsupported
+        )
+        return
     }
     SurfaceCard(
         level = SurfaceTokens.CardLevel.Subtle,
@@ -2272,17 +2424,40 @@ private fun ScreenshotGallery(
                     GameScreenshots.SetupState.NEED_SAMPLE -> "需初始化"
                     GameScreenshots.SetupState.UNSUPPORTED -> "不可用"
                 }
+                // 取色逻辑：背景 / 描边统一用 accent 派生（GamePageColors.tonal），不再用中性 iconTonalBg，
+                // 使角标随游戏取色（accent）联动；已绑定截图时填充更深。
+                // 文字统一用主题 onSurface（onAccent 仅适用于 solid accent 背景，tonal 透明底上浅色 accent 会返回黑字、深色页难读）。
+                // 触摸事件：仅「已绑定截图（READY 且有截图）」可点击，弹出重置绑定确认框；
+                // 未初始化 / 初始化阶段（NEED_TREE / NEED_SAMPLE / UNSUPPORTED）点击无反应。
+                val canResetBinding = state == GameScreenshots.SetupState.READY && shots.isNotEmpty()
+                val badgeBg = if (canResetBinding) GamePageColors.tonal(accent, 0.22f) else GamePageColors.tonal(accent, 0.10f)
+                val badgeBorder = if (canResetBinding) GamePageColors.tonal(accent, 0.6f) else GamePageColors.tonal(accent, 0.3f)
+                val badgeText = if (canResetBinding) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                 Box(
                     modifier = Modifier
                         .height(24.dp)
                         .clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(SurfaceTokens.iconTonalBg())
-                        .border(Dimens.FocusBorderWidth, GamePageColors.tonal(accent, 0.45f), androidx.compose.foundation.shape.CircleShape)
+                        .background(badgeBg)
+                        .accentOutline(badgeBorder, androidx.compose.foundation.shape.CircleShape)
+                        .clickable(enabled = canResetBinding, onClick = { showResetDialog = true })
                         .padding(horizontal = Dimens.sm),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(text = countLabel, style = MaterialTheme.typography.labelSmall, color = if (state == GameScreenshots.SetupState.READY && shots.isNotEmpty()) accent else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(text = countLabel, style = MaterialTheme.typography.labelSmall, color = badgeText)
                 }
+            }
+            if (showResetDialog) {
+                AlertDialog(
+                    onDismissRequest = { showResetDialog = false },
+                    title = { Text("重置游戏截图绑定", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
+                    text = { Text("是否重置该游戏截图绑定？将清除当前游戏的截图归类记录，需重新选择样例初始化。", style = MaterialTheme.typography.bodyMedium) },
+                    confirmButton = {
+                        ReverieFilledButton(onClick = { showResetDialog = false; gallery?.onRetry?.invoke() }, danger = true, text = "确认")
+                    },
+                    dismissButton = {
+                        ReverieTextButton(onClick = { showResetDialog = false }, text = "取消")
+                    }
+                )
             }
 
             when (state) {
@@ -2291,7 +2466,7 @@ private fun ScreenshotGallery(
                 GameScreenshots.SetupState.NEED_SAMPLE ->
                     ScreenshotInitCard(onRequest = { gallery?.onRequestSample?.invoke() }, accent = accent)
                 GameScreenshots.SetupState.UNSUPPORTED ->
-                    ScreenshotUnsupportedCard()
+                    ScreenshotUnsupportedCard(accent = accent, onRetry = { gallery?.onRetry?.invoke() })
                 GameScreenshots.SetupState.READY -> {
                     if (shots.isEmpty()) {
                         Box(Modifier.fillMaxWidth().padding(vertical = Dimens.lg), contentAlignment = Alignment.Center) {
@@ -2350,7 +2525,7 @@ private fun ScreenshotTile(
             .width(tileW)
             .aspectRatio(16f / 9f)
             .clip(MaterialTheme.shapes.medium)
-            .border(Dimens.FocusBorderWidth, GamePageColors.tonal(accent, if (selected) 1f else 0.3f), MaterialTheme.shapes.medium)
+            .accentOutline(GamePageColors.tonal(accent, if (selected) 1f else 0.3f), MaterialTheme.shapes.medium)
             .clickable { onClick() }
     ) {
         if (bmp != null) {
@@ -2374,7 +2549,8 @@ private fun ScreenshotTile(
                     .background(accent.copy(alpha = 0.85f), RoundedCornerShape(Dimens.RadiusXs))
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
-                Text("视频", style = MaterialTheme.typography.labelSmall, color = Color.White)
+                // solid accent 背景（0.85f）→ 用 onAccent 取对比色：浅色 accent 返回黑字、深色 accent 返回白字，均可读
+                Text("视频", style = MaterialTheme.typography.labelSmall, color = GamePageColors.onAccent(accent))
             }
         }
         BottomFadeMask(
@@ -2411,7 +2587,7 @@ private fun ScreenshotViewAllTile(
             .width(tileW)
             .aspectRatio(16f / 9f)
             .clip(MaterialTheme.shapes.medium)
-            .border(Dimens.FocusBorderWidth, GamePageColors.tonal(accent, if (selected) 1f else 0.3f), MaterialTheme.shapes.medium)
+            .accentOutline(GamePageColors.tonal(accent, if (selected) 1f else 0.3f), MaterialTheme.shapes.medium)
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
@@ -2428,7 +2604,8 @@ private fun ScreenshotViewAllTile(
             Text(
                 "查看全部",
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = Color.White.copy(alpha = 0.95f)
+                // 该磁贴无填充背景（仅 accent 描边），文字应随主题深浅：白底浅色主题下黑字、深色页白字
+                color = MaterialTheme.colorScheme.onSurface
             )
             Text(
                 "$count 张",
@@ -2458,7 +2635,7 @@ private fun ScreenshotPermissionCard(onRequest: () -> Unit, accent: Color) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dimens.sm)) {
                 Icon(Icons.Filled.FolderOpen, contentDescription = null, tint = accent, modifier = Modifier.size(Dimens.IconMd))
-                Text("授权截图文件夹", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold), color = Color.White.copy(alpha = 0.92f))
+                Text("授权截图文件夹", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f))
             }
             Text(
                 "本功能按截图文件名后缀哈希自动归类该游戏的截图 / 录屏。请授权访问系统 Pictures / Screenshots 文件夹（仅读取，不会修改你的文件）。",
@@ -2506,28 +2683,44 @@ private fun ScreenshotInitCard(onRequest: () -> Unit, accent: Color) {
 }
 
 @Composable
-private fun ScreenshotUnsupportedCard() {
+private fun ScreenshotUnsupportedCard(accent: Color, onRetry: () -> Unit = {}) {
     SurfaceCard(level = SurfaceTokens.CardLevel.Default, shape = Dimens.RadiusMd) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(Dimens.CardInnerPadding),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Dimens.sm)
+            verticalArrangement = Arrangement.spacedBy(Dimens.xs)
         ) {
-            Icon(Icons.Filled.Block, contentDescription = null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(Dimens.IconMd))
-            Text(
-                "当前设备截图文件名不含哈希后缀，无法自动归类，该功能已在本设备屏蔽。",
-                style = MaterialTheme.typography.labelSmall,
-                color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium),
-                lineHeight = 18.sp,
-                modifier = Modifier.weight(1f)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Dimens.sm)
+            ) {
+                Icon(Icons.Filled.Block, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(Dimens.IconMd))
+                Text(
+                    "本游戏的截图文件名不含哈希后缀，无法自动归类到该游戏；如为误判，可重试重新初始化。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium),
+                    lineHeight = 18.sp,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            ReverieFilledButton(
+                onClick = onRetry,
+                accent = accent,
+                text = "重试",
+                focused = false,
+                modifier = Modifier.align(Alignment.End)
             )
         }
     }
 }
 
-/** 时长趋势概览：总计 / 日均 / 最高 + 近 N 天条形图。 */
+/** 时长趋势概览：总计 / 日均 / 最高 + 近 N 天条形图。聚焦 slot = contentBase + 0（审计：此前不可聚焦，DOWN 跳过）。 */
 @Composable
-private fun TrendSummary(data: GamePageData, variant: GamePageVariant) {
+private fun TrendSummary(
+    data: GamePageData,
+    variant: GamePageVariant,
+    focused: Boolean = false,
+    onActivate: () -> Unit = {}
+) {
     val series = data.daySeries
     if (series.isEmpty()) return
     val total = series.sum()
@@ -2537,12 +2730,19 @@ private fun TrendSummary(data: GamePageData, variant: GamePageVariant) {
     val max = best.coerceAtLeast(1L)
     val window = if (variant.isXL || variant.structure == GPStructure.LAND_3) series.size.coerceAtMost(30) else series.size.coerceAtMost(14)
     val recent = series.takeLast(window)
-    SurfaceCard(level = SurfaceTokens.CardLevel.Subtle, shape = Dimens.RadiusLg) {
+    SurfaceCard(
+        modifier = Modifier
+            .focusBorder(focused, data.accent, RoundedCornerShape(Dimens.RadiusLg))
+            .clickable { onActivate() },
+        level = if (focused) SurfaceTokens.CardLevel.Default else SurfaceTokens.CardLevel.Subtle,
+        shape = Dimens.RadiusLg,
+        border = false
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(Dimens.CardInnerPadding),
             verticalArrangement = Arrangement.spacedBy(Dimens.sm)
         ) {
-            Text("时长趋势", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold), color = Color.White.copy(alpha = 0.92f))
+            Text("时长趋势", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f))
             Row(horizontalArrangement = Arrangement.spacedBy(Dimens.sm)) {
                 TrendStat("总计", if (total > 0) formatDuration(total) else "暂无", Modifier.weight(1f))
                 TrendStat("日均", if (avg > 0) formatDuration(avg) else "暂无", Modifier.weight(1f))
@@ -2560,7 +2760,10 @@ private fun TrendSummary(data: GamePageData, variant: GamePageVariant) {
                             .weight(1f)
                             .fillMaxHeight(frac.coerceAtLeast(0.04f))
                             .clip(RoundedCornerShape(Dimens.RadiusXs))
-                            .background(Brush.verticalGradient(listOf(data.accent, GamePageColors.tonal(data.accent, 0.5f))))
+                            .background(
+                                if (LocalAmoledPureBlack.current) SolidColor(data.accent)
+                                else Brush.verticalGradient(listOf(data.accent, GamePageColors.tonal(data.accent, 0.5f)))
+                            )
                     )
                 }
             }
@@ -2572,7 +2775,7 @@ private fun TrendSummary(data: GamePageData, variant: GamePageVariant) {
 @Composable
 private fun TrendStat(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(value, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(value, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(label, style = MaterialTheme.typography.labelSmall, color = SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Medium))
     }
 }

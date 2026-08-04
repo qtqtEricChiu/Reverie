@@ -16,7 +16,10 @@ import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.getSystemService
+import cn.mocabolka.run.BuildConfig
 import cn.mocabolka.run.launcher.PLACEHOLDER_ICON_COLOR
+import cn.mocabolka.run.launcher.RemoteVersion
+import cn.mocabolka.run.launcher.UpdateRepository
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.mocabolka.run.gamepad.Direction
@@ -34,8 +37,19 @@ import cn.mocabolka.run.launcher.CategoryMapping
 import cn.mocabolka.run.launcher.FavoritesRepository
 import cn.mocabolka.run.launcher.GameWhitelist
 import cn.mocabolka.run.launcher.RecentsRepository
+import cn.mocabolka.run.launcher.DayEntry
+import cn.mocabolka.run.launcher.MonthSummary
+import cn.mocabolka.run.launcher.NotificationHistoryStore
+import cn.mocabolka.run.launcher.NotificationRecord
+import cn.mocabolka.run.launcher.SenderAgg
+import cn.mocabolka.run.launcher.SocialAppClassifier
+import cn.mocabolka.run.launcher.TieredQueryCoordinator
+import cn.mocabolka.run.launcher.TieredSerializer
 import cn.mocabolka.run.launcher.UsageStatsRepository
+import java.io.File
 import cn.mocabolka.run.compat.BadgeStore
+import cn.mocabolka.run.compat.NotificationItem
+import cn.mocabolka.run.compat.RecentNotificationStore
 import cn.mocabolka.run.ui.components.StatsPeriod
 import cn.mocabolka.run.compat.UsageStatsPermissionHelper
 import cn.mocabolka.run.ui.SettingsRepository
@@ -90,6 +104,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val launcher = AppLauncher(application)
     /** 设置仓库，供 UI 层读取/修改深色模式等偏好。 */
     val settings = SettingsRepository(application)
+
+    /** 应用内更新：远端 version.json 版本检查仓库（2026-07-30）。 */
+    private val updateRepository = UpdateRepository(application)
+
+    /** 待提示的远端新版本；null = 无更新或已处理。HomeScreen 收集后弹 UpdateDialog。 */
+    private val _pendingUpdate = MutableStateFlow<RemoteVersion?>(null)
+    val pendingUpdate: StateFlow<RemoteVersion?> = _pendingUpdate.asStateFlow()
+
+    init {
+        // 启动静默检查更新：6h 间隔节流 + 「跳过此版本」过滤均在仓库层完成；
+        // 网络失败静默返回 null，绝不打扰用户。
+        viewModelScope.launch {
+            val remote = updateRepository.checkForUpdate(BuildConfig.VERSION_CODE) ?: return@launch
+            _pendingUpdate.value = remote
+        }
+    }
+
+    /** 用户选「跳过此版本」：持久化该版本号（同版本不再提示）并关闭弹窗。 */
+    fun skipUpdateVersion(versionCode: Int) {
+        updateRepository.skipVersion(versionCode)
+        _pendingUpdate.value = null
+    }
+
+    /** 用户选「稍后」/关闭弹窗：仅本次关闭，下个检查周期（6h 后启动）再提示。 */
+    fun dismissUpdate() {
+        _pendingUpdate.value = null
+    }
     /**
      * LauncherApps 服务：用于监听安装/卸载实时回调。
      * 注意：非默认桌面且未授予 QUERY_ALL_PACKAGES 受限权限时，getSystemService 返回 null，
@@ -271,6 +312,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** 各应用未读通知数（来自通知监听服务，C6-1），供网格/最近/收藏 tile 角标。 */
     val badges: StateFlow<Map<String, Int>> = BadgeStore.badges
 
+    /** 最近通知快照（最多 10 条，按时间倒序），供竖屏详情浮窗通知卡片展示与跳转。 */
+    val recentNotifications: StateFlow<List<NotificationItem>> =
+        RecentNotificationStore.recentNotifications
+
     /**
      * 预聚合的今日/本周使用时长 Map（R13 性能优化）。
      * 随 refresh() 一次性计算，避免 UI 层逐行调用 todayUsageOf/weeklyUsageOf 触发 O(n²) 遍历
@@ -298,6 +343,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val favoritesRepo = FavoritesRepository(application)
     private val usageStatsRepo = UsageStatsRepository(application)
+
+    init {
+        // 通知历史持久化库（与角标/近期流分离）：VM 侧兜底初始化，
+        // 保证监听服务尚未拉起时统计页查询也不空指针。
+        NotificationHistoryStore.init(application)
+    }
+
+    /**
+     * 分层查询协调器：对上层屏蔽热层 / 冷层差异。
+     * 热层 90 天内零 IO（直接读 [usageStatsRepo] 内存）；90 天前按需读按月归档并 LRU 缓存。
+     */
+    private val usageArchiveDir = File(application.filesDir, "archives/usage_stats")
+    private val usageCoordinator = TieredQueryCoordinator(usageStatsRepo, usageArchiveDir, TieredSerializer)
+
+    /** 年视图数据集（跨热冷合并）：各应用汇总 + 逐月时长 / 次数，供 StatsScreen 异步加载。 */
+    data class YearlyData(
+        val report: List<UsageStatsRepository.UsageEntry>,
+        val monthTotals: List<Pair<Long, Long>>,
+        val monthCounts: List<Pair<Long, Int>>
+    )
+
+    /** 历史回溯：某年某月的归档数据集。 */
+    data class HistoryMonthReport(
+        val year: Int,
+        val month: Int,
+        val apps: List<UsageStatsRepository.UsageEntry>,
+        val totalMs: Long,
+        val daySeries: List<Pair<String, Long>>
+    )
 
     /** 报表数据（日报/周报/月报/年报），由 [refreshReports] 填充，供设置页展示。 */
     private val _dailyReport = MutableStateFlow<List<UsageStatsRepository.UsageEntry>>(emptyList())
@@ -396,6 +470,90 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun yearlyReportFor(anchorMs: Long): List<UsageStatsRepository.UsageEntry> =
         usageStatsRepo.getYearlyFor(anchorMs)
 
+    // ── 分层异步查询：跨热冷合并（年视图 / 历史回溯）──
+    private fun yearRangeMs(anchorMs: Long): Pair<Long, Long> {
+        val cal = Calendar.getInstance().apply { timeInMillis = anchorMs }
+        cal.set(Calendar.DAY_OF_YEAR, 1)
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        val start = cal.timeInMillis
+        cal.add(Calendar.YEAR, 1); cal.add(Calendar.MILLISECOND, -1)
+        return start to cal.timeInMillis
+    }
+
+    private fun monthStartMsOf(ms: Long): Long {
+        val cal = Calendar.getInstance().apply { timeInMillis = ms }
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    /** 年视图各应用汇总（热 + 冷合并，可能跨越冷层）。 */
+    suspend fun yearlyReportForAsync(anchorMs: Long): List<UsageStatsRepository.UsageEntry> =
+        withContext(Dispatchers.IO) {
+            val (ys, ye) = yearRangeMs(anchorMs)
+            usageCoordinator.loadForRange(dateKeyOf(ys), dateKeyOf(ye))
+                .values
+                .sortedByDescending { it.ms }
+                .map { UsageStatsRepository.UsageEntry(it.packageName, it.ms, it.count) }
+        }
+
+    /** 年视图完整数据集（各应用汇总 + 逐月时长 / 次数），跨热冷合并。 */
+    suspend fun loadYearlyData(anchorMs: Long): YearlyData = withContext(Dispatchers.IO) {
+        val (ys, ye) = yearRangeMs(anchorMs)
+        val startKey = dateKeyOf(ys)
+        val endKey = dateKeyOf(ye)
+        val report = usageCoordinator.loadForRange(startKey, endKey)
+            .values
+            .sortedByDescending { it.ms }
+            .map { UsageStatsRepository.UsageEntry(it.packageName, it.ms, it.count) }
+        val totals = ArrayList<Pair<Long, Long>>()
+        val counts = ArrayList<Pair<Long, Int>>()
+        val cal = Calendar.getInstance().apply { timeInMillis = ys }
+        while (cal.timeInMillis <= ye) {
+            val ms = cal.timeInMillis
+            val mStartMs = monthStartMsOf(ms)
+            val calEnd = Calendar.getInstance().apply {
+                timeInMillis = ms
+                set(Calendar.DAY_OF_MONTH, 1); add(Calendar.MONTH, 1); add(Calendar.DAY_OF_MONTH, -1)
+            }
+            val m = usageCoordinator.loadForRange(dateKeyOf(mStartMs), dateKeyOf(calEnd.timeInMillis))
+            totals.add(mStartMs to m.values.sumOf { it.ms })
+            counts.add(mStartMs to m.values.sumOf { it.count })
+            cal.add(Calendar.MONTH, 1)
+        }
+        YearlyData(report, totals, counts)
+    }
+
+    /** 归档中存在的年份列表（升序）。 */
+    suspend fun listArchiveYears(): List<Int> = withContext(Dispatchers.IO) {
+        usageCoordinator.listArchiveYears()
+    }
+
+    /** 某年有归档的月份概要。 */
+    suspend fun listArchiveMonths(year: Int): List<MonthSummary> = withContext(Dispatchers.IO) {
+        usageCoordinator.listArchiveMonths(year)
+    }
+
+    /** 加载某年某月归档（合并各应用汇总 + 逐日时长序列），供历史回溯展示。 */
+    suspend fun loadHistoryMonth(year: Int, month: Int): HistoryMonthReport? = withContext(Dispatchers.IO) {
+        val am = usageCoordinator.loadArchiveMonth(year, month) ?: return@withContext null
+        val perApp = linkedMapOf<String, DayEntry>()
+        am.days.forEach { (_, dayMap) ->
+            dayMap.forEach { (pkg, e) ->
+                val ex = perApp[pkg]
+                perApp[pkg] = if (ex == null) e else DayEntry(pkg, ex.ms + e.ms, ex.count + e.count)
+            }
+        }
+        val apps = perApp.values
+            .sortedByDescending { it.ms }
+            .map { UsageStatsRepository.UsageEntry(it.packageName, it.ms, it.count) }
+        val totalMs = apps.sumOf { it.ms }
+        val daySeries = am.days.keys.sorted().map { dk -> dk to (am.days[dk]?.values?.sumOf { it.ms } ?: 0L) }
+        HistoryMonthReport(year, month, apps, totalMs, daySeries)
+    }
+
     /**
      * 统计报表系统应用折叠：
      * - 开启「显示系统应用」时原样返回（系统应用以各自包名出现在排行中）；
@@ -439,6 +597,60 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** 最近 [n] 天（含锚点当天）每天总时长列表，按日期倒序（最新在最上）。供统计页每日列表。 */
     fun dailyUsageList(n: Int, anchorMs: Long = System.currentTimeMillis()): List<Pair<Long, Long>> =
         usageStatsRepo.getDailyUsageList(n, anchorMs)
+
+    // ── 通知统计 API（NotificationHistoryStore，热层同步零 IO / 冷层 Dispatchers.IO）──
+
+    /** 通知历史数据版本号：新记录写入时自增，UI 以其为 key 触发重读。 */
+    val notificationsVersion: StateFlow<Long> = NotificationHistoryStore.changeTick
+
+    /** 今日 dateKey（yyyy-MM-dd）。 */
+    fun notificationTodayKey(): String = NotificationHistoryStore.todayKey()
+
+    /** 某天各应用通知条数（热层同步零 IO）。 */
+    fun notificationCountsForDay(dateKey: String): Map<String, Int> =
+        NotificationHistoryStore.countByPackageForDay(dateKey)
+
+    /** 某天通知条数 Top（速览榜单用），按条数降序。 */
+    fun notificationTopForDay(dateKey: String, limit: Int): List<Pair<String, Int>> =
+        NotificationHistoryStore.countByPackageForDay(dateKey)
+            .entries.sortedByDescending { it.value }
+            .take(limit)
+            .map { it.key to it.value }
+
+    /** 某天全部通知记录（时间倒序）。热层同步命中，冷层读归档。 */
+    suspend fun notificationListForDay(dateKey: String): List<NotificationRecord> =
+        NotificationHistoryStore.listForDay(dateKey)
+
+    /** 日期范围各应用通知条数（热 + 冷合并，IO 线程）。 */
+    suspend fun notificationCountsForRange(start: String, end: String): Map<String, Int> =
+        NotificationHistoryStore.countByPackageForRange(start, end)
+
+    /**
+     * 组装社交包名集合：内置白名单 ∪ 全应用列表中 categoryText=="社交" 的包名
+     * （含 CategoryOverrideRepository AI 回灌覆盖——覆盖已在 AppModel.categoryText 装配时生效）。
+     */
+    fun socialPackages(): Set<String> {
+        val fromCategory = _apps.value
+            .filter { SocialAppClassifier.isSocial(it.packageName, it.categoryText) }
+            .map { it.packageName }
+        return SocialAppClassifier.BUILTIN_SOCIAL + fromCategory
+    }
+
+    /** 某天社交应用发件人 Top 聚合（热层同步零 IO）。 */
+    fun topSendersForDay(dateKey: String, limit: Int): List<SenderAgg> =
+        NotificationHistoryStore.topSendersForDay(dateKey, limit, socialPackages())
+
+    /** 日期范围社交应用发件人 Top 聚合（热 + 冷合并，IO 线程）。 */
+    suspend fun topSendersForRange(start: String, end: String, limit: Int): List<SenderAgg> =
+        NotificationHistoryStore.topSendersForRange(start, end, limit, socialPackages())
+
+    /** 日期范围按日通知总数序列（日期升序），供通知历史趋势图。 */
+    suspend fun notificationDailyCounts(start: String, end: String): List<Pair<String, Int>> =
+        NotificationHistoryStore.dailyCountsForRange(start, end)
+
+    /** 日期范围全部通知明细（按时间升序），供通知历史钻取子页按应用/发件人筛选。 */
+    suspend fun notificationListForRange(start: String, end: String): List<NotificationRecord> =
+        NotificationHistoryStore.listForRange(start, end)
 
     /** 最近 [n] 天（含锚点当天）每天总启动次数列表，按日期倒序。供统计页每日列表（次数模式）。 */
     fun dailyCountList(n: Int, anchorMs: Long = System.currentTimeMillis()): List<Pair<Long, Int>> =
@@ -599,17 +811,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** 增量操作后重建分类状态（Tab / 计数 / 精选）。 */
     private fun rebuildCategoryState() {
         val merged = _apps.value
-        // 分类计数
+        // 分类计数（精选计数须在 rebuildFeatured 之后取最新值，见下方补充）
         val counts = mutableMapOf(
             "全部" to merged.size,
-            "精选" to _featured.value.size,
             "收藏" to favorites.value.size
         )
         merged.forEach { a ->
             val c = a.categoryText
             counts[c] = (counts[c] ?: 0) + 1
         }
-        _categoryCounts.value = counts
         val cats = listOf("全部") + merged.map { it.categoryText }.distinct()
         _filterChips.value = cats
         val wlInstalled = merged.any {
@@ -628,6 +838,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 it.packageName in GameWhitelist.packages
         }
         rebuildFeatured(allGames)
+        // 精选角标须在 rebuildFeatured 之后取最新 _featured，避免计数陈旧（少 1）
+        counts["精选"] = _featured.value.size
+        _categoryCounts.value = counts
         _games.value = allGames.filter { it.packageName !in featuredPackages() }
     }
 
@@ -756,17 +969,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 AppCache.save(appContext, merged)
                 // 图标已在 AppRepository.safeIcon 中自动写入 IconCache 磁盘缓存
                 _todayUsageMap.value = todayMap
-                // 分类计数
+                // 分类计数（精选计数须在 rebuildFeatured 之后取最新值，见下方补充）
                 val counts = mutableMapOf(
                     "全部" to merged.size,
-                    "精选" to _featured.value.size,
                     "收藏" to favorites.value.size
                 )
                 merged.forEach { a ->
                     val c = a.categoryText
                     counts[c] = (counts[c] ?: 0) + 1
                 }
-                _categoryCounts.value = counts
                 val cats = listOf("全部") + merged.map { it.categoryText }.distinct()
                 _filterChips.value = cats
                 val wlInstalled = apps.any {
@@ -795,6 +1006,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         it.packageName in GameWhitelist.packages
                 }
                 rebuildFeatured(allGames)
+                // 精选角标须在 rebuildFeatured 之后取最新 _featured，避免计数陈旧（少 1）
+                counts["精选"] = _featured.value.size
+                _categoryCounts.value = counts
                 _games.value = allGames.filter { it.packageName !in featuredPackages() }
                 // 最近游玩：延迟到后台并行加载，不阻塞主列表
                 launch {

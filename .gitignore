@@ -44,3 +44,9 @@ check_braces.py
 
 # Release APK output
 app/release/
+
+# 签名文件（绝不可入库）
+*.jks
+*.keystore
+keystore.properties
+signing.properties

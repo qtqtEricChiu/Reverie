@@ -109,7 +109,9 @@ import cn.mocabolka.run.ui.components.ReverieIconButton
 import cn.mocabolka.run.ui.components.ReverieTextButton
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LocalShowFocusIndicators
+import cn.mocabolka.run.ui.theme.focusBorder
 import cn.mocabolka.run.ui.theme.MotionSpec
+import cn.mocabolka.run.ui.theme.rememberStaggeredEntrance
 import cn.mocabolka.run.ui.theme.SurfaceTokens
 import cn.mocabolka.run.viewmodel.SortMode
 import kotlinx.coroutines.delay
@@ -690,20 +692,13 @@ fun SettingsPage(
             // 入场错峰动画（与 AppListItem 统一：淡入 + 轻微上移）
             // 使用 MotionSpec.Fast（220ms）+ stagger 8ms/项上限 160ms，
             // 快速滚动跳过（由 LazyColumn scroll state 控制）。
-            var appeared by remember(entranceKey) { mutableStateOf(reduceMotion) }
-            LaunchedEffect(entranceKey) {
-                if (reduceMotion) { appeared = true; return@LaunchedEffect }
-                appeared = false
-                delay(MotionSpec.staggerDelay(index, perMs = 8, maxMs = 160))
-                appeared = true
-            }
-            val entAlpha by animateFloatAsState(
-                targetValue = if (appeared) 1f else 0f,
-                animationSpec = MotionSpec.Fast, label = "setEntA"
-            )
-            val entY by animateFloatAsState(
-                targetValue = if (appeared) 0f else 10f,
-                animationSpec = MotionSpec.Fast, label = "setEntY"
+            val (entAlpha, entY) = rememberStaggeredEntrance(
+                entranceIndex = index,
+                entranceKey = entranceKey,
+                reduceMotion = reduceMotion,
+                perMs = 8,
+                maxMs = 160,
+                startOffsetY = 10f
             )
             Box(modifier = Modifier.graphicsLayer { alpha = entAlpha; translationY = entY }) {
                 when (item) {
@@ -867,13 +862,7 @@ private fun SwitchListItem(
             .focusRequester(focusRequester)
             .onFocusChanged { if (it.isFocused) onFocus() }
             .clip(MaterialTheme.shapes.medium)
-            .then(
-                if (focused && !disabled) Modifier.border(
-                    Dimens.FocusBorderWidthSelected,
-                    MaterialTheme.colorScheme.primary,
-                    MaterialTheme.shapes.medium
-                ) else Modifier
-            )
+            .focusBorder(focused && !disabled)
             .combinedClickable(
                 enabled = !disabled,
                 interactionSource = interactionSource,
@@ -988,11 +977,7 @@ private fun ButtonListItem(
             .focusRequester(focusRequester)
             .onFocusChanged { if (it.isFocused) onFocus() }
             .clip(MaterialTheme.shapes.medium)
-            .then(
-                if (focused) Modifier.border(
-                    Dimens.FocusBorderWidthSelected, accent, MaterialTheme.shapes.medium
-                ) else Modifier
-            )
+            .focusBorder(focused, accent)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -1221,21 +1206,7 @@ fun DropdownDialog(
         }
     ) {
         // 卡片：限制最大宽度（精致）+ 点击不冒泡关闭
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
-            modifier = Modifier
-                .widthIn(max = 460.dp)
-                .fillMaxWidth(0.92f)
-                .padding(Dimens.md)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { }
-                )
-        ) {
-            Column(
+        Column(
                 modifier = Modifier.padding(Dimens.lg),
                 verticalArrangement = Arrangement.spacedBy(Dimens.xs)
             ) {
@@ -1259,7 +1230,7 @@ fun DropdownDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp)
+                        .heightIn(max = Dimens.DialogListMaxHeight)
                 ) {
                     LazyColumn(
                         state = listState,
@@ -1292,19 +1263,14 @@ fun DropdownDialog(
                                 onClick = { onSelect(opt) },
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    // 边框走归一化 focusBorder；带 shape 的高亮背景保留手写
+                                    // （focusCardVisual 的背景不带 shape，会在圆角外溢出成矩形）
+                                    .focusBorder(isHighlighted, shape = MaterialTheme.shapes.small)
                                     .then(
-                                    if (isHighlighted) Modifier
-                                        .then(
-                                            if (showFocus) Modifier
-                                                .border(
-                                                    Dimens.FocusBorderWidthSelected, MaterialTheme.colorScheme.primary,
-                                                    MaterialTheme.shapes.small
-                                                )
-                                                    .background(
-                                                        SurfaceTokens.focusBg(),
-                                                        MaterialTheme.shapes.small
-                                                    )
-                                            else Modifier
+                                    if (isHighlighted && showFocus) Modifier
+                                        .background(
+                                            SurfaceTokens.focusBg(),
+                                            MaterialTheme.shapes.small
                                         )
                                     else Modifier
                                 )
@@ -1315,7 +1281,6 @@ fun DropdownDialog(
                 }
                 Spacer(Modifier.height(Dimens.xs))
             }
-        }
     }
 }
 
@@ -1345,7 +1310,7 @@ private fun VerticalScrollbar(state: LazyListState, itemCount: Int) {
                 .fillMaxHeight(thumbRatio)
                 .background(
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                    RoundedCornerShape(2.dp)
+                    RoundedCornerShape(Dimens.RadiusXxs)
                 )
         )
         Spacer(Modifier.fillMaxHeight((1f - offsetRatio - thumbRatio).coerceAtLeast(0f)))
@@ -1366,8 +1331,7 @@ fun ConfirmDialog(
     cutoutAdapt: Boolean = false
 ) {
     // 与 DropdownDialog / InfoDialog 统一：全屏遮罩（ScrimAlpha）+ 居中 Surface
-    // indication=null 屏蔽遮罩长按水波纹触控动画（不影响入场退场与手柄焦点）。
-    val scrimInteractionSource = remember { MutableInteractionSource() }
+    // indication=null 屏蔽遮罩长按水波纹触控动画（由 DialogScaffold 统一处理）。
     DialogScaffold(
         onDismiss = onDismiss,
         cutoutAdapt = cutoutAdapt,
@@ -1376,22 +1340,7 @@ fun ConfirmDialog(
             Hint(KeyToken.B, "关闭")
         }
     ) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
-            modifier = Modifier
-                // 卡片在 DialogScaffold 内层 Box(contentAlignment=Center) 中自动居中，无需 .align(Center)。
-                .widthIn(max = 460.dp)
-                .fillMaxWidth(0.92f)
-                .padding(Dimens.md)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { }
-                )
-        ) {
-            Column(
+        Column(
                 modifier = Modifier.padding(Dimens.lg),
                 verticalArrangement = Arrangement.spacedBy(Dimens.md)
             ) {
@@ -1420,7 +1369,6 @@ fun ConfirmDialog(
                     ReverieTextButton(onClick = onConfirm, danger = true, text = "确认")
                 }
             }  // close Row
-        }  // close Surface
     }  // close DialogScaffold
 }  // close ConfirmDialog
 
@@ -1442,7 +1390,8 @@ fun InfoDialog(
     // indication=null 屏蔽遮罩长按水波纹触控动画。
     DialogScaffold(
         onDismiss = onDismiss,
-        showBottomHint = false
+        showBottomHint = false,
+        unifiedContainer = false
     ) {
         BoxWithConstraints(
             modifier = Modifier
@@ -1453,7 +1402,7 @@ fun InfoDialog(
             Surface(
                 shape = MaterialTheme.shapes.large,
                 color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
+                tonalElevation = Dimens.DialogElevation,
                 modifier = Modifier
                     .widthIn(max = dialogMaxW)
                     .fillMaxWidth()
@@ -1489,7 +1438,7 @@ fun InfoDialog(
                             tonal = true
                         )
                     }
-                    Spacer(Modifier.height(Dimens.xs))
+                    Spacer(Modifier.height(Dimens.md))
                     // 内容区：超长时滚动（正文 + 可选图片），底部键位栏固定不滚
                     Column(
                         modifier = Modifier

@@ -1,5 +1,6 @@
 package cn.mocabolka.run.ui.components
 
+import cn.mocabolka.run.ui.theme.DeviceProfile
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -45,6 +46,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,8 +90,8 @@ import cn.mocabolka.run.ui.theme.edgeSafePadding
 object SubPageSpec {
     /** 内容最大宽度（宽屏居中）。 */
     val ContentMaxWidth = 880.dp
-    /** 宽屏判定阈值（与项目全局 720dp 一致）。 */
-    val WideThreshold = 720.dp
+    /** 宽屏判定阈值（统一委托 DeviceProfile.WIDE_SCREEN_DP，与项目全局 720dp 一致）。 */
+    val WideThreshold = DeviceProfile.WIDE_SCREEN_DP.dp
 }
 
 /**
@@ -242,6 +246,9 @@ fun SubPageScaffold(
     val cutoutAdapt = remember { cn.mocabolka.run.ui.SettingsRepository(context).cutoutAdapt }
 
 
+    val scaffoldFocus = remember { FocusRequester() }
+    // 进入即请求焦点：确保手柄 A/B 等按键稳定送达下方 onKeyEvent（与 subPageKeyHandler 同源范式）。
+    LaunchedEffect(Unit) { scaffoldFocus.requestFocus() }
     Surface(
         // 根 Surface 先 fillMaxSize 占满全屏（背景色铺到瀑布区两侧/底部，避免外层 windowBackground 透出造成色块割裂）；
         // 内容层统一由 inner Column 的 edgeSafePadding(cutoutAdapt) 处理（仅左右，绝不碰上下）。
@@ -249,6 +256,8 @@ fun SubPageScaffold(
         // 所有复用本框架的子页面（About/Licenses/CompatGuide）自动获得，无需各自调用方传 modifier。
         modifier = modifier
             .fillMaxSize()
+            .focusRequester(scaffoldFocus)
+            .focusTarget()
             .onKeyEvent { ev ->
                 val n = ev.nativeKeyEvent
                 if (n.action != android.view.KeyEvent.ACTION_DOWN) return@onKeyEvent false

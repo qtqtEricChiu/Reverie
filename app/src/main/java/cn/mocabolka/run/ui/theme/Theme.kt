@@ -1,6 +1,11 @@
 package cn.mocabolka.run.ui.theme
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.Indication
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -10,11 +15,17 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import cn.mocabolka.run.gamepad.GamepadDetector
+import cn.mocabolka.run.gamepad.InputMode
+import cn.mocabolka.run.gamepad.InputModeManager
 import cn.mocabolka.run.ui.DarkMode
 import cn.mocabolka.run.ui.SettingsRepository
 import androidx.compose.ui.text.TextStyle
@@ -22,10 +33,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** AMOLED 纯黑模式开关：由 [LandscapeTheme] 注入，供背景层判断是否使用纯黑以省电。 */
+val LocalAmoledPureBlack = compositionLocalOf { false }
+
+/** 浅色内容（状态栏/前景文字）开关：由 [LightContent] 注入，供子组件判断是否使用浅色前景。 */
+val LocalLightContent = compositionLocalOf { false }
+
+@Composable
+fun LightContent(lightContent: Boolean, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalLightContent provides lightContent) { content() }
+}
+
 // ─── 品牌默认配色（Material Design 3 紫罗兰调色板）──────────
 // 设计规范：M3 Baseline Palette（#6750A4 紫罗兰主色），WCAG AA 对比度达标。
 // 用途：作为莫奈动态取色不可用时的默认回退色板（见 reverieColorScheme → MonetTheme）。
-// 注意：莫奈取色保持现状不变，仅替换默认（非莫奈）配色。
 object BrandColors {
     // ── 浅色主题 ──
     object Light {
@@ -330,29 +351,73 @@ fun LandscapeTheme(
      * 主屏 / 设置页等已持有实时 Flow 的调用方应显式传入以获得即时响应。
      */
     glassSurface: Boolean? = null,
+    /**
+     * 穿透壁纸模式（驱动 [LocalWallpaperBehind] 全局注入）。
+     * 传 null 时由主题内部新建 [SettingsRepository] 读取持久化值（子页独立 Activity 场景）；
+     * 主屏 / 设置页等已持有实时 Flow 的调用方应显式传入以获得即时响应。
+     * 玻璃开启 + 穿透壁纸 → 卡片表面进一步降到 Overlay 最透档，让磨砂壁纸清晰透出。
+     */
+    wallpaperBehind: Boolean? = null,
     content: @Composable () -> Unit
 ) {
     val colorScheme = reverieColorScheme(darkTheme, useMonet, isAmoled)
     val ctx = LocalContext.current
-    // 焦点框可见性：手柄未连接 / 纯触控模式下关闭，避免无意义的焦点高亮。
-    // remember 缓存 Flow 实例：否则每次重组新建 callbackFlow 导致广播接收器反复注册/注销
+    // 输入模式：基于最近一次交互来源（触控 / 手柄），由 MainActivity 事件驱动，全局单例。
+    val inputMode = InputModeManager.mode.collectAsState().value
+    // 物理连接状态（用于 UI hints 等，与输入模式解耦）
     val gamepadFlow = remember(ctx) { GamepadDetector.gamepadConnectedFlow(ctx) }
-    val showFocus = gamepadConnected
+    val gamepadPhysicallyConnected = gamepadConnected
         ?: gamepadFlow.collectAsState(initial = GamepadDetector.isGamepadConnected()).value
+    // 焦点框可见 = 物理连接 AND 当前为手柄模式（触控模式 / 手柄连接但用触屏时均隐藏）。
+    // remember 缓存 Flow 实例：否则每次重组新建 callbackFlow 导致广播接收器反复注册/注销
+    val showFocus = gamepadPhysicallyConnected && inputMode == InputMode.Gamepad
     // 玻璃开关：调用方未提供时回退到 SharedPreferences 持久化值（跨 Activity 一致）
     val glass = glassSurface
         ?: remember(ctx) { SettingsRepository(ctx) }.glassSurfaceFlow.collectAsState().value
+    // 穿透壁纸：调用方未提供时回退到持久化值（跨 Activity 一致）
+    val wp = wallpaperBehind
+        ?: remember(ctx) { SettingsRepository(ctx) }.wallpaperBehindFlow.collectAsState().value
+    // ── 状态栏字体明暗随主题自动反转（全局收口）──
+    // enableEdgeToEdge 默认状态栏内容恒浅色（白字），浅色主题下不可读。此处按主题实际
+    // 深浅向系统发送外观配置：浅色主题→黑字（isAppearanceLightStatusBars=true）、深色→白字。
+    // 设置页实时切换深浅模式时 darkTheme 变化即重发，无需重建 Activity。
+    // 注意组合顺序：本效应位于最外层主题，先于页面内的覆盖效应执行——
+    // 游戏页有美术资源时会在内层 LaunchedEffect 再次覆盖为白字（后启动者胜出），互不冲突。
+    val view = LocalView.current
+    LaunchedEffect(darkTheme, view) {
+        if (view.isInEditMode) return@LaunchedEffect
+        val window = view.context.findActivity()?.window ?: return@LaunchedEffect
+        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+    }
     CompositionLocalProvider(
         LocalShowFocusIndicators provides showFocus,
-        LocalGlassEnabled provides glass
+        LocalGlassEnabled provides glass,
+        LocalWallpaperBehind provides wp,
+        LocalAmoledPureBlack provides isAmoled
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = TvTypography,
-            shapes = TvShapes,
-            content = content
-        )
+            shapes = TvShapes
+        ) {
+            // 在 MaterialTheme 内部复写 LocalIndication（MaterialTheme 会内置 ripple，外部包会被覆盖）：
+            // 触控模式 → NoIndication（全局静默，隐藏 Material3 原生涟漪 / 焦点高亮）；
+            // 手柄模式 → 保留默认 ripple（LocalIndication.current 即 MaterialTheme 内置值）。
+            CompositionLocalProvider(
+                LocalIndication provides
+                    if (inputMode == InputMode.Touch) NoIndication else LocalIndication.current
+            ) {
+                content()
+            }
+        }
     }
+}
+
+/** 从 Compose 视图的 Context 链上解包出宿主 Activity（用于取 window 配置状态栏外观）。 */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 /**
@@ -363,6 +428,8 @@ fun LandscapeTheme(
 @Composable
 fun LandscapeTheme(
     settings: SettingsRepository,
+    /** 手柄连接状态透传（见主实现同名参数说明）；省略时由主题内部自行计算。 */
+    gamepadConnected: Boolean? = null,
     content: @Composable () -> Unit
 ) {
     val darkTheme = when (settings.darkMode) {
@@ -374,7 +441,54 @@ fun LandscapeTheme(
         darkTheme = darkTheme,
         useMonet = settings.useMonet,
         isAmoled = settings.darkMode == DarkMode.AMOLED,
+        gamepadConnected = gamepadConnected,
         glassSurface = settings.glassSurfaceFlow.collectAsState().value,
         content = content
     )
+}
+
+// ─── 页面主题统一判定（状态栏字色 + 背景 + 组件深浅单一真源）──────────
+/**
+ * 统一页面主题判定（2026-07-29 用户定稿优先级）：
+ * 1. SteamDB WebView 探针页（[isSteamDb]=true）→ 永久深色（白字反白），无视美术判定。
+ * 2. 含美术资源 / 用户自定义内容（[hasArtOrCustom]=true）→ 强制深色 + 压暗遮罩 + 反白部件。
+ * 3. 其余（无美术无自定义）→ 跟随外部深色/浅色设置，状态栏字色随背景深浅自动反转。
+ *
+ * [darkTheme] 走深色色板；[lightContent]=true 时状态栏与 UI 字体为白（由 [LightContent] 把 colorScheme 全改为白）；
+ * [themedNoArtFallback]=true 时背景使用「白→强调色」主题化渐变（见 [cn.mocabolka.run.ui.game.GameArtBackground]）。
+ */
+data class PageTheme(
+    val darkTheme: Boolean,
+    val lightContent: Boolean,
+    val themedNoArtFallback: Boolean
+)
+
+/**
+ * 集中解析应用深色模式：LIGHT→false，DARK/AMOLED→true，SYSTEM→[systemDark]。
+ * 单一真源，[ComponentActivity.isAppInDarkMode] 与 [resolvePageTheme] 共用，避免散写 `when(darkMode)`。
+ */
+fun SettingsRepository.isDarkTheme(systemDark: Boolean): Boolean = when (darkMode) {
+    DarkMode.LIGHT -> false
+    DarkMode.DARK, DarkMode.AMOLED -> true
+    else -> systemDark
+}
+
+/**
+ * 页面主题统一入口（须在 Composable 作用域调用，以便通过 [isSystemInDarkTheme] 解析 SYSTEM 模式）。
+ * 各页面（主页/游戏页/子页）统一消费此结果驱动 [LandscapeTheme]、[LightContent] 与背景渐变，
+ * 消除各页面散写的 `!= DarkMode.LIGHT`、`isAppInDarkMode`、`lightContent` 硬编码判定。
+ */
+@Composable
+fun resolvePageTheme(
+    hasArtOrCustom: Boolean,
+    settings: SettingsRepository,
+    isSteamDb: Boolean = false
+): PageTheme {
+    val systemDark = isSystemInDarkTheme()
+    val appDark = settings.isDarkTheme(systemDark)
+    return when {
+        isSteamDb -> PageTheme(darkTheme = true, lightContent = true, themedNoArtFallback = false)
+        hasArtOrCustom -> PageTheme(darkTheme = true, lightContent = true, themedNoArtFallback = false)
+        else -> PageTheme(darkTheme = appDark, lightContent = appDark, themedNoArtFallback = true)
+    }
 }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -259,11 +260,16 @@ fun <T> ReverieSegmentedRow(
     /** 是否显示文字标签；false 仅显示图标（用于纯图标 toggle，如指标维度切换）。 */
     showLabel: Boolean = true,
     /** 可选图标：提供时每段显示 图标 + 文字（用于视图切换等 icon toggle）。 */
-    icon: (T) -> ImageVector? = { null }
+    icon: (T) -> ImageVector? = { null },
+    /** 是否横向撑满（默认 true：等分整行，用于独立成行的分段控件）；
+     *  false 时按内容自适应宽度（用于标题栏内联，与大 Tab 同行）。
+     *  关键：fillMaxWidth=false 时内段不能使用 weight(1f)（wrap-content Row 下 weight 无效，会导致子段 0 宽不显示文字），
+     *  改用 wrapContentWidth() + 水平 padding 让每段按文本自适应宽度。 */
+    fillMaxWidth: Boolean = true
 ) {
     Row(
         modifier = modifier
-            .fillMaxWidth()
+            .then(if (fillMaxWidth) Modifier.fillMaxWidth() else Modifier.wrapContentWidth())
             .clip(MaterialTheme.shapes.medium)
             .background(SurfaceTokens.segmentContainer())
             .padding(4.dp),
@@ -273,14 +279,14 @@ fun <T> ReverieSegmentedRow(
             val isSel = item == selected
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .then(if (fillMaxWidth) Modifier.weight(1f) else Modifier.wrapContentWidth())
                     .clip(MaterialTheme.shapes.medium)
                     .background(
                         if (isSel) MaterialTheme.colorScheme.primaryContainer
                         else Color.Transparent
                     )
                     .clickable { onSelect(item) }
-                    .padding(vertical = 8.dp),
+                    .then(if (fillMaxWidth) Modifier.padding(vertical = 8.dp) else Modifier.padding(horizontal = 10.dp, vertical = 6.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {

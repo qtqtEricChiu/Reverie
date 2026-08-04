@@ -82,6 +82,19 @@ fun AboutPage(
             )
             Spacer(Modifier.height(8.dp))
         },
+        // 项目 GitHub 仓库（置顶于 icon 正下方）
+        SubPageRow.Link(
+            key = "github",
+            label = "GitHub",
+            desc = "项目开源代码仓库",
+            onClick = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/qtqtEricChiu/Reverie"))
+                    )
+                }
+            }
+        ),
         SubPageRow.Static(key = "div1") {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         },

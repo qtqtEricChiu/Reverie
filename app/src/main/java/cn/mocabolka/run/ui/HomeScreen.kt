@@ -1,7 +1,5 @@
 package cn.mocabolka.run.ui
 
-import cn.mocabolka.run.ui.components.statusBarSafeTop
-
 import android.annotation.SuppressLint
 import android.app.WallpaperManager
 import android.content.Intent
@@ -16,12 +14,11 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -32,19 +29,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -97,7 +89,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -106,21 +97,16 @@ import cn.mocabolka.run.compat.OrientationManager
 import cn.mocabolka.run.compat.UsageStatsPermissionHelper
 import cn.mocabolka.run.gamepad.DialogLayer
 import cn.mocabolka.run.gamepad.Direction
-import cn.mocabolka.run.gamepad.GamepadDetector
 import cn.mocabolka.run.gamepad.GamepadEvent
 import cn.mocabolka.run.gamepad.NavigateSource
 import cn.mocabolka.run.gamepad.RightStickScroll
 import cn.mocabolka.run.gamepad.RightStickScrollPhysics
 import cn.mocabolka.run.gamepad.Side
 import cn.mocabolka.run.launcher.AppModel
-import cn.mocabolka.run.util.matchesSearch
-import cn.mocabolka.run.util.pinyinOf
 import cn.mocabolka.run.launcher.isGameLike
 import cn.mocabolka.run.ui.components.AmbientBackground
 import cn.mocabolka.run.ui.components.AppDetailPanel
 import cn.mocabolka.run.ui.components.AppListItem
-import cn.mocabolka.run.ui.game.GameArtResolver
-import cn.mocabolka.run.ui.game.GamePageActivity
 import cn.mocabolka.run.ui.components.DropdownDialog
 import cn.mocabolka.run.ui.components.GamepadBottomHintBar
 import cn.mocabolka.run.ui.components.GamepadVisible
@@ -131,29 +117,38 @@ import cn.mocabolka.run.ui.components.KeyBadge
 import cn.mocabolka.run.ui.components.KeyToken
 import cn.mocabolka.run.ui.components.LaunchOverlay
 import cn.mocabolka.run.ui.components.NativeDatePickerDialog
-import cn.mocabolka.run.ui.components.StatsPeriod
-import cn.mocabolka.run.ui.components.StatsControlBridge
-import cn.mocabolka.run.ui.components.StatsOverviewSlot
-import cn.mocabolka.run.ui.components.ReveriePeriodPickerDialog
+import cn.mocabolka.run.ui.components.RecentNotificationsCard
 import cn.mocabolka.run.ui.components.ReverieFilledButton
+import cn.mocabolka.run.ui.components.ReveriePeriodPickerDialog
+import cn.mocabolka.run.ui.components.ReverieSegmentedRow
 import cn.mocabolka.run.ui.components.SettingsConfirm
 import cn.mocabolka.run.ui.components.SettingsControlBridge
 import cn.mocabolka.run.ui.components.SettingsPage
 import cn.mocabolka.run.ui.components.SplashOverlay
+import cn.mocabolka.run.ui.components.StatsControlBridge
+import cn.mocabolka.run.ui.components.StatsOverviewSlot
+import cn.mocabolka.run.ui.components.StatsPeriod
+import cn.mocabolka.run.ui.components.StatsSubTab
 import cn.mocabolka.run.ui.components.StatusBar
+import cn.mocabolka.run.ui.components.UpdateDialog
+import cn.mocabolka.run.ui.components.statusBarSafeTop
 import cn.mocabolka.run.ui.components.wrapFocusBorder
+import cn.mocabolka.run.ui.game.GameArtResolver
+import cn.mocabolka.run.ui.game.GamePageActivity
+import cn.mocabolka.run.ui.theme.DeviceProfile
 import cn.mocabolka.run.ui.theme.Dimens
 import cn.mocabolka.run.ui.theme.LandscapeTheme
 import cn.mocabolka.run.ui.theme.MotionMachines
-import cn.mocabolka.run.ui.theme.MotionSpec
 import cn.mocabolka.run.ui.theme.ReverieToast
 import cn.mocabolka.run.ui.theme.SurfaceTokens
+import cn.mocabolka.run.ui.theme.edgeSafePadding
 import cn.mocabolka.run.ui.theme.focusBorder
 import cn.mocabolka.run.ui.theme.frosted
-import cn.mocabolka.run.ui.theme.edgeSafePadding
+import cn.mocabolka.run.ui.theme.resolvePageTheme
+import cn.mocabolka.run.util.matchesSearch
+import cn.mocabolka.run.util.pinyinOf
 import cn.mocabolka.run.viewmodel.HomeViewModel
 import cn.mocabolka.run.viewmodel.SortMode
-import cn.mocabolka.run.BuildConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -194,6 +189,8 @@ fun HomeScreen(
     val isBooting by viewModel.isBooting.collectAsState()
     val showOverlay by viewModel.showOverlay.collectAsState()
     val badges by viewModel.badges.collectAsState()
+    // 最近通知快照（最多 10 条）：仅竖屏详情浮窗渲染通知卡片。
+    val recentNotifications by viewModel.recentNotifications.collectAsState()
     val showBadges by viewModel.settings.showBadgesFlow.collectAsState()
     val hapticIntensity by viewModel.settings.hapticIntensity.collectAsState()
     val badgeOf: (String) -> Int = { pkg -> if (showBadges) badges[pkg] ?: 0 else 0 }
@@ -217,9 +214,8 @@ fun HomeScreen(
     // 挖孔屏适配开关（响应式）：控制主体是否加 displayCutout padding 绕开摄像头；
     // 必须 collectAsState，否则切换开关后 HomeScreen 主体 padding 不重组，表现为"开关用不了"。
     val cutoutAdapt by viewModel.settings.cutoutAdaptFlow.collectAsState()
-    // 减少动态效果（直接读取 SettingsRepository.effectiveReduceMotion）
+    // 减少动态效果：直接采用用户设置值（节能模式已移除，无额外聚合）
     val effectiveReduceMotion by viewModel.settings.reduceMotionFlow.collectAsState()
-    // 动效开关直接使用用户设置值（节能模式已移除，不再聚合）
     val effectiveDynamicBackground = dynamicBackground
     // 玻璃拟态开关不再逐层透传：经 LandscapeTheme 注入 LocalGlassEnabled，组件各自读取
     // R13：应用可见性（Lifecycle 驱动），用于暂停氛围背景等空闲动画以省电
@@ -243,8 +239,16 @@ fun HomeScreen(
     val searchFocusTarget by viewModel.searchFocusTarget.collectAsState()
 
     // 屏幕宽度判定（21:9 宽屏 vs 中等屏）：用于事件循环中决定方向键行为（十字右键是否切到右侧面板）
+    // 同时驱动统计页双栏布局（横屏双栏仅在宽屏阈值以上启用，窄屏横屏保持单栏）。
     // Compose 1.8+ 推荐使用 LocalWindowInfo.containerSize 替代 Configuration.screenWidthDp
-    val isWideScreen = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() >= 720.dp }
+    val isWideScreen = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() >= DeviceProfile.WIDE_SCREEN_DP.dp }
+    // 横屏（方向）判定：宽 > 高。与 isWideScreen（双栏阈值）解耦——
+    // 统计页子 Tab 收折到 StatusBar 由「横屏」驱动而非「宽屏」，
+    // 这样手机横屏（宽度未达双栏阈值）也能收折子 Tab，同时不误触发双栏布局。
+    val isLandscape = with(LocalDensity.current) {
+        val size = LocalWindowInfo.current.containerSize
+        size.width.toDp() > size.height.toDp()
+    }
 
     // 手柄连接状态：用于控制上下文键位角标（LB/RB/X/Menu）的显隐；remember 防重组时重复订阅
     // P1-1：手柄连接状态统一取 HomeViewModel 单一可信源（消除 LandscapeTheme 内独立 collectAsState 的时序空洞）
@@ -268,6 +272,9 @@ fun HomeScreen(
     // 统计页左栏（总计/图表）滚动状态：宽屏双栏时由右摇杆驱动滚动（任务 14/15）
     val statsLeftScrollState = rememberScrollState()
     var statsPeriod by remember { mutableStateOf(cn.mocabolka.run.ui.components.StatsPeriod.DAILY) }
+    // 统计页子 Tab（速览/使用时长/启动次数/通知历史）：提升到父级持有，
+    // 以支持横屏下将子 Tab 滑块注入 StatusBar 与大 Tab 同行（同时驱动 StatsScreen 受控渲染）。
+    var statsSubTab by remember { mutableStateOf(StatsSubTab.OVERVIEW) }
     // 统计页日期锚点（ms，0:00 当天）：日/周/月/年视图各自的选定日期，默认今天
     var statsAnchorMs by remember { mutableStateOf(System.currentTimeMillis()) }
     // 统计页日期选择器开关（LS 键 / 本页按钮驱动）
@@ -297,8 +304,13 @@ fun HomeScreen(
     // 切换到 STATS Tab 时重置焦点侧 / 焦点到左栏首项
     LaunchedEffect(currentTab) {
         if (currentTab == MainTab.STATS) {
-            // 进页默认落 RANK 区首项（保留既有肌肉记忆与"从顶部总览看"约束：首帧抑制滚动）。
-            statsFocusSide = FocusSide.LEFT_LIST
+            // 速览子 Tab 无排行(RANK)区，焦点应默认落在总览控件区(OVERVIEW/LEFT_LIST)首项；
+            // 其他子 Tab（使用时长/启动次数/通知历史）默认落右栏排行区(RANK)首项。
+            if (statsControl.currentSubTab == StatsSubTab.OVERVIEW.ordinal) {
+                statsFocusSide = FocusSide.LEFT_LIST
+            } else {
+                statsFocusSide = FocusSide.RIGHT_PANEL
+            }
             statsFocusIndex = 0
             statsOverviewIndex = 0
             statsAutoScrollSuppressed = true
@@ -307,6 +319,26 @@ fun HomeScreen(
         // 进入搜索后的焦点复位（focusSide→LEFT_LIST / searchFocusTarget→LIST）由内层
         // LaunchedEffect(searchActive) 统一处理（该作用域才持有 focusSide 等状态）。
         viewModel.setSearchActive(currentTab == MainTab.SEARCH)
+    }
+    // 切换统计子 Tab（速览/使用时长/启动次数/通知历史）时回到页面顶部（周期栏），
+    // 否则焦点/滚动残留应用排行会导致切换后自动定位到排行首行而非最顶部。
+    LaunchedEffect(statsSubTab) {
+        if (currentTab == MainTab.STATS) {
+            // 速览无排行区：焦点默认落总览控件区；其他子 Tab 默认落排行区。
+            if (statsSubTab == StatsSubTab.OVERVIEW) {
+                statsFocusSide = FocusSide.LEFT_LIST
+            } else {
+                statsFocusSide = FocusSide.RIGHT_PANEL
+            }
+            statsFocusIndex = 0
+            statsOverviewIndex = 0
+            statsAutoScrollSuppressed = true
+        }
+        // 指标子 Tab（非速览）：升 overviewSlotCount 到 5，使 DOWN 能落到 EXPAND 槽
+        if (statsSubTab != StatsSubTab.OVERVIEW) statsControl.overviewSlotCount = 5
+        // 同步展开按钮聚焦态（手柄落 EXPAND 槽时高亮）
+        statsControl.focusedExpand = statsFocusSide == FocusSide.LEFT_LIST
+                && statsOverviewIndex == StatsOverviewSlot.EXPAND
     }
     // P0-1：统计页焦点→窗口自动滚动跟随。进入统计页首帧抑制（已在上面置位），
     // 之后左摇杆导航改变 statsFocusIndex 时，列表滚动到当前焦点项，使焦点框始终可见。
@@ -363,11 +395,27 @@ fun HomeScreen(
         } else {
             // 非设置页：关闭所有可能残留的 dialog 状态
             statsDatePickerOpen = false
+            if (currentDialogLayer == DialogLayer.UPDATE) viewModel.dismissUpdate()
             if (currentDialogLayer != DialogLayer.NONE) {
                 setDialogLayer(DialogLayer.NONE)
             }
         }
         viewModel.setSettingsOpen(currentTab == MainTab.SETTINGS)
+    }
+
+    // ── 应用内更新提示（2026-07-30）：ViewModel 启动静默检查，检测到新版本后弹 UpdateDialog。──
+    // 弹窗可见性以「pendingUpdate 非空 且 事件层已切到 UPDATE」为准：
+    // 若当时已有其它弹窗打开，先等待其关闭再接管事件层，避免层级互踩。
+    val pendingUpdate by viewModel.pendingUpdate.collectAsState()
+    LaunchedEffect(pendingUpdate) {
+        if (pendingUpdate != null) {
+            while (currentDialogLayer != DialogLayer.NONE && currentDialogLayer != DialogLayer.UPDATE) {
+                delay(500.milliseconds)
+            }
+            setDialogLayer(DialogLayer.UPDATE)
+        } else if (currentDialogLayer == DialogLayer.UPDATE) {
+            setDialogLayer(DialogLayer.NONE)
+        }
     }
 
     // 详情浮层：可手动锚定（按详情/选择等），或 1.8s 自动消失
@@ -530,6 +578,11 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         viewModel.events.collectLatest { event ->
+            // 顶层异常兜底（全局健壮性）：单个事件处理若抛异常，绝不能取消 collectLatest 协程——
+            // 否则 rightStickY 不再更新，右摇杆滚动引擎（独立 LaunchedEffect）读到恒为 0 的 rightStickY，
+            // 导致主页/搜索/统计/设置全部 Tab 右摇杆滚动全局失效（子页面用独立引擎故不受影响）。
+            // 这与"右摇杆在 HomeScreen/MainActivity 下全局无法使用"的现象完全吻合，必须就地吞掉单事件异常。
+            try {
             // ── 事件栈顶层分发：DialogLayer 非 NONE 时所有事件优先路由到 dialog ──
             // Trigger（LT/RT）事件在 GamepadManager 层已被 dialogActive 守卫屏蔽，
             // 此处兜底检查：即使有 Trigger 穿透，也直接 return（双保险）。
@@ -582,6 +635,30 @@ fun HomeScreen(
                             control = settingsControl.value,
                             dialogLayer = currentDialogLayer
                         )
+                        return@collectLatest
+                    }
+                    DialogLayer.UPDATE -> {
+                        // 应用内更新提示弹窗：A=立即更新（打开下载页）/ B=稍后 / X=跳过此版本。
+                        when (event) {
+                            is GamepadEvent.Select -> {
+                                haptics.click()
+                                pendingUpdate?.let { remote ->
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(remote.downloadUrl)))
+                                    }
+                                }
+                                viewModel.dismissUpdate()
+                            }
+                            is GamepadEvent.Back -> {
+                                haptics.tick()
+                                viewModel.dismissUpdate()
+                            }
+                            is GamepadEvent.Favorite -> {
+                                haptics.tick()
+                                pendingUpdate?.let { viewModel.skipUpdateVersion(it.versionCode) }
+                            }
+                            else -> { /* 其它按键在 dialog 打开时不处理 */ }
+                        }
                         return@collectLatest
                     }
                     DialogLayer.NONE -> { /* 不会走到这里 */ }
@@ -659,52 +736,58 @@ fun HomeScreen(
                     haptics.tick()
                     when (currentTab) {
                         MainTab.STATS -> {
-                            // 统计页手柄焦点状态机（手柄全链路重构）：二维寻址消除"整体UI按钮点不了"死区。
-                            //  RANK(LEFT_LIST)  = 左栏应用排行（既有：左摇杆上下移动焦点、A 启动）。
-                            //  OVERVIEW(RIGHT_PANEL) = 右栏总览控件（周期/日期/视图/指标），此前手柄不可达。
+                            // 统计页手柄焦点状态机：二维寻址（LEFT_LIST=左栏总览控件 / RIGHT_PANEL=右栏应用排行）。
+                            //  RANK(RIGHT_PANEL) = 右栏应用排行（左摇杆上下移动焦点、A 钻取/启动）。
+                            //  OVERVIEW(LEFT_LIST) = 左栏总览控件（周期/日期/视图），手柄可达。
                             // 宽屏(双栏)：LEFT/RIGHT 切区，UP/DOWN 区内遍历。
                             // 窄屏(单栏)：UP/DOWN 纵向链式贯通——总览控件在上、排行在下，末槽↔排行首项互通。
+                            // ── 子 Tab 方向键路由：速览(总览控件 周期/日期/视图)与使用时长/启动次数/通知历史
+                            //    共用下方二维寻址状态机（通知历史右栏 A=钻取、Y=视图）。
+                            //    速览仅 OVERVIEW 区有可聚焦控件（无排行 RANK 区），焦点恒在 LEFT_LIST。
                             val slotCount = statsControl.overviewSlotCount.coerceAtLeast(1)
                             val maxRank = (statsEntryCount - 1).coerceAtLeast(0)
                             if (statsFocusSide == FocusSide.LEFT_LIST) {
+                                // 左栏总览控件（周期/日期/视图）：上下移动槽位；宽屏右拨→右栏排行
                                 when (event.direction) {
                                     Direction.UP -> {
-                                        if (statsFocusIndex > 0) {
-                                            statsFocusIndex -= 1
+                                        if (statsOverviewIndex > 0) {
+                                            statsOverviewIndex -= 1
                                         } else if (!isWideScreen) {
-                                            // 窄屏：排行顶部再上拨 → 进入总览控件区末槽
+                                            // 窄屏：控件顶槽再上拨 → 进入排行区末项
                                             statsFocusSide = FocusSide.RIGHT_PANEL
-                                            statsOverviewIndex = slotCount - 1
+                                            statsFocusIndex = maxRank
                                         }
-                                    }
-                                    Direction.DOWN -> statsFocusIndex = (statsFocusIndex + 1).coerceAtMost(maxRank)
-                                    Direction.RIGHT -> {
-                                        // 宽屏：右拨切到右栏总览控件区（进入首槽）
-                                        if (isWideScreen) {
-                                            statsFocusSide = FocusSide.RIGHT_PANEL
-                                            statsOverviewIndex = 0
-                                        }
-                                    }
-                                    else -> { /* LEFT：已在最左栏，no-op */ }
-                                }
-                            } else {
-                                when (event.direction) {
-                                    Direction.UP -> {
-                                        if (statsOverviewIndex > 0) statsOverviewIndex -= 1
-                                        // 窄屏顶槽/宽屏顶槽再上拨：保持（不回排行，避免误跳）
                                     }
                                     Direction.DOWN -> {
                                         if (statsOverviewIndex < slotCount - 1) {
                                             statsOverviewIndex += 1
                                         } else if (!isWideScreen) {
                                             // 窄屏：控件末槽再下拨 → 进入排行区首项
-                                            statsFocusSide = FocusSide.LEFT_LIST
+                                            statsFocusSide = FocusSide.RIGHT_PANEL
                                             statsFocusIndex = 0
                                         }
                                     }
+                                    Direction.RIGHT -> {
+                                        if (isWideScreen) {
+                                            statsFocusSide = FocusSide.RIGHT_PANEL
+                                            statsFocusIndex = 0
+                                        }
+                                    }
+                                    else -> { /* LEFT：已在最左栏，no-op */ }
+                                }
+                            } else {
+                                // 右栏应用排行：上下移动焦点；宽屏左拨→左栏总览控件
+                                when (event.direction) {
+                                    Direction.UP -> {
+                                        if (statsFocusIndex > 0) statsFocusIndex -= 1
+                                        // 窄屏顶项/宽屏顶项再上拨：保持（不回控件，避免误跳）
+                                    }
+                                    Direction.DOWN -> statsFocusIndex = (statsFocusIndex + 1).coerceAtMost(maxRank)
                                     Direction.LEFT -> {
-                                        // 宽屏：左拨回左栏排行
-                                        if (isWideScreen) statsFocusSide = FocusSide.LEFT_LIST
+                                        if (isWideScreen) {
+                                            statsFocusSide = FocusSide.LEFT_LIST
+                                            statsOverviewIndex = 0
+                                        }
                                     }
                                     else -> { /* RIGHT：已在最右栏，no-op */ }
                                 }
@@ -808,42 +891,59 @@ fun HomeScreen(
                     }
                 }
                 is GamepadEvent.Select -> {
-                    // 统计页：跨栏已移除，日期按钮不再可聚焦（由 View 键 / 点击打开），
-                    // 故 A 在统计页无启动语义，统一 no-op（保留 tick 反馈避免无响应感）。
+                    // 统计页 A 键路由（新双栏：左=趋势区 OVERVIEW / 右=排行区 RANK）：
+                    // - 速览(OVERVIEW 子 Tab)：A 无操作（tick）。
+                    // - 通知历史：A 激活当前焦点项（仍活跃通知复用 PendingIntent 跳转，否则启动应用）。
+                    // - 使用时长/启动次数：A 按焦点区派发——趋势区槽位(周期/日期/视图) or 排行启动。
                     if (currentTab == MainTab.STATS) {
-                        if (statsFocusSide == FocusSide.RIGHT_PANEL) {
-                            // OVERVIEW 区（手柄全链路重构）：A 按当前控件槽分发，
-                            // 让周期/日期/视图/指标控件全部手柄可达——彻底消除"按钮点不了"死区。
-                            haptics.click()
-                            when (statsOverviewIndex) {
-                                StatsOverviewSlot.PERIOD -> {
-                                    val order = cn.mocabolka.run.ui.components.selectableStatsPeriods
-                                    val idx = order.indexOf(statsPeriod).let { if (it < 0) 0 else it }
-                                    statsPeriod = order[(idx + 1) % order.size]
-                                }
-                                StatsOverviewSlot.DATE -> {
-                                    statsDatePickerOpen = true
-                                    setDialogLayer(DialogLayer.STATS_DATE_PICKER)
-                                }
-                                StatsOverviewSlot.VIEW -> statsControl.toggleView()
-                                StatsOverviewSlot.METRIC -> statsControl.toggleMetric()
-                                else -> { /* 槽越界保护 */ }
-                            }
-                        } else {
-                            // RANK 区：A 启动当前聚焦排行项（P1-2）。游戏→游戏页，
-                            // 横屏直接启动，竖屏弹出详情浮窗（与触控 onEntryClick 一致）。
-                            val pkg = statsFocusedPackage
-                            if (pkg != null) {
-                                haptics.click()
-                                val app = viewModel.apps.value.firstOrNull { it.packageName == pkg }
-                                if (app != null) {
-                                    when {
-                                        shouldOpenGamePage(app) -> openGamePage(app)
-                                        isWideScreen -> viewModel.launchApp(app)
-                                        else -> { viewModel.setFocused(pkg); portraitDrawerOpen = true }
+                        when (statsControl.currentSubTab) {
+                            StatsSubTab.OVERVIEW.ordinal -> haptics.tick()
+                            else -> {
+                                if (statsFocusSide == FocusSide.LEFT_LIST) {
+                                    // 左栏趋势区(OVERVIEW)：A 按当前控件槽分发
+                                    haptics.click()
+                                    when (statsOverviewIndex) {
+                                        StatsOverviewSlot.PERIOD -> {
+                                            val order = cn.mocabolka.run.ui.components.selectableStatsPeriods
+                                            val idx = order.indexOf(statsPeriod).let { if (it < 0) 0 else it }
+                                            statsPeriod = order[(idx + 1) % order.size]
+                                        }
+                                        StatsOverviewSlot.DATE -> {
+                                            statsDatePickerOpen = true
+                                            setDialogLayer(DialogLayer.STATS_DATE_PICKER)
+                                        }
+                                        StatsOverviewSlot.VIEW -> statsControl.toggleView()
+                                        StatsOverviewSlot.METRIC -> statsControl.toggleMetric()
+                                        StatsOverviewSlot.EXPAND -> {
+                                            if (statsControl.expandToggle != null) statsControl.expandToggle?.invoke()
+                                            else haptics.tick()
+                                        }
+                                        else -> { /* 槽越界保护 */ }
+                                    }
+                                } else {
+                                    if (statsControl.currentSubTab == StatsSubTab.NOTIFICATIONS.ordinal) {
+                                        // 通知历史：右栏排行 A = 钻取到该应用/发件人通知明细
+                                        if (statsControl.notifActivate()) haptics.click() else haptics.tick()
+                                    } else if (statsControl.currentSubTab == StatsSubTab.OVERVIEW.ordinal) {
+                                        // 速览：A = 激活当前焦点 Top 卡，跳转对应子 Tab（0=使用时长 1=启动次数 2=通知历史）
+                                        if (statsControl.overviewActivate()) haptics.click() else haptics.tick()
+                                    } else {
+                                    // 右栏排行区(RANK)：A 启动当前聚焦排行项
+                                    val pkg = statsFocusedPackage
+                                    if (pkg != null) {
+                                        haptics.click()
+                                        val app = viewModel.apps.value.firstOrNull { it.packageName == pkg }
+                                        if (app != null) {
+                                            when {
+                                                shouldOpenGamePage(app) -> openGamePage(app)
+                                                isWideScreen -> viewModel.launchApp(app)
+                                                else -> { viewModel.setFocused(pkg); portraitDrawerOpen = true }
+                                            }
+                                        }
+                                    } else haptics.tick()
                                     }
                                 }
-                            } else haptics.tick()
+                            }
                         }
                     } else if (focusSide == FocusSide.RIGHT_PANEL && (currentTab == MainTab.HOME || currentTab == MainTab.SEARCH)) {
                         // 详情态（主页/搜索页共用同一详情面板/浮层）：A 触发当前焦点按钮（0=启动），焦点跟随。
@@ -960,6 +1060,10 @@ fun HomeScreen(
                             settingsControl.value.onDismissOverlay()
                             haptics.tick()
                         }
+                        currentTab == MainTab.STATS -> {
+                            if (statsControl.notifBack()) haptics.click()
+                            else { currentTab = MainTab.HOME; haptics.tick() }
+                        }
                         currentTab != MainTab.HOME -> { currentTab = MainTab.HOME; haptics.tick() }
                         // 竖屏详情浮层展开时按 B：收起浮层并同步退出详情态（focusSide 回 LEFT_LIST），
                         // 避免 focusSide 残留 RIGHT_PANEL 导致 effectiveFocus 误显右栏焦点框/ A 浮块（R6 修复）。
@@ -976,14 +1080,14 @@ fun HomeScreen(
                         }
                         detailPinned -> { detailPinned = false; haptics.tick() }
                         else -> {
-                    // 触摸/系统返回键退出：二次确认（底部气泡）。
-                    if (touchExitConfirm) {
-                        onExit()
-                    } else {
-                        touchExitConfirm = true
-                        haptics.click()
-                    }
-                }
+                            // 触摸/系统返回键退出：二次确认（底部气泡）。
+                            if (touchExitConfirm) {
+                                onExit()
+                            } else {
+                                touchExitConfirm = true
+                                haptics.click()
+                            }
+                        }
                     }
                 }
                 is GamepadEvent.Favorite -> {
@@ -1017,8 +1121,25 @@ fun HomeScreen(
                                 haptics.tick()
                             }
                         }
+                // 统计页 X 语义：三内容子 Tab（使用详情/启动次数/通知历史）统一切日周月年周期；
+                // 速览（无周期）无操作。视图切换（Chart/List）已迁到 Y 键，与另两页键位对齐。
+                MainTab.STATS -> {
+                    when (statsControl.currentSubTab) {
+                        StatsSubTab.NOTIFICATIONS.ordinal,
+                        StatsSubTab.USAGE_DURATION.ordinal,
+                        StatsSubTab.LAUNCH_COUNT.ordinal -> {
+                            haptics.click()
+                            val order = cn.mocabolka.run.ui.components.selectableStatsPeriods
+                            val idx = order.indexOf(statsPeriod).let { if (it < 0) 0 else it }
+                            statsPeriod = order[(idx + 1) % order.size]
+                        }
                         else -> haptics.tick()
                     }
+                }
+                // 设置页：X 键无绑定（由 handleSettingsEvent 接管），补 else 满足穷尽性。
+                else -> { /* 无操作 */ }
+                // 关闭 when(currentTab) 与 is GamepadEvent.Favorite 分支
+                }
                 }
                 is GamepadEvent.LeftStickPress -> {
                     // LS（左摇杆按压）：跨栏逻辑已移除。现作页面内"聚焦/进入"动作键：
@@ -1113,13 +1234,32 @@ fun HomeScreen(
                                 }
                             }
                         }
+                        // 统计页 Y 语义：三指标页（使用时长 / 启动次数 / 通知历史）均支持 Y 键切换 图表/列表 视图；
+                        // 指标页（使用时长/启动次数）走 statsControl.toggleView()，通知历史走 notifToggleView()。
+                        // 修复（2026-08-04）：此前 else 分支对使用时长/启动次数直接 haptics.tick() 丢弃 Y，
+                        // 导致这两页 Y 切视图失效（被误改为"仅通知历史绑定、其余不绑定避免冲突"）。
+                        // 速览无 chart/list 视图，保持 tick 无操作。
+                        MainTab.STATS -> {
+                            when (statsControl.currentSubTab) {
+                                StatsSubTab.NOTIFICATIONS.ordinal -> {
+                                    haptics.click(); statsControl.notifToggleView()
+                                }
+                                StatsSubTab.USAGE_DURATION.ordinal, StatsSubTab.LAUNCH_COUNT.ordinal -> {
+                                    haptics.click(); statsControl.toggleView()
+                                }
+                                else -> haptics.tick()
+                            }
+                        }
                         // 其它页：Y 键无绑定（约束：仅搜索页下 Y 键有按键绑定事件）
                         else -> { /* 无操作 */ }
                     }
                 }
                 is GamepadEvent.ViewPress -> {
-                    // View 键（Xbox 双方块按钮）：统计页打开日期选择器；其它页无操作
-                    if (currentTab == MainTab.STATS) {
+                    // View 键：统计页·使用时长/启动次数/通知历史 三 Tab 打开日期选择器；
+                    // 速览(今日快照，无周期)及其它页无操作。
+                    if (currentTab == MainTab.STATS &&
+                        statsControl.currentSubTab != StatsSubTab.OVERVIEW.ordinal
+                    ) {
                         statsDatePickerOpen = true; setDialogLayer(DialogLayer.STATS_DATE_PICKER); haptics.tick()
                     } else haptics.tick()
                 }
@@ -1130,13 +1270,10 @@ fun HomeScreen(
                         MainTab.HOME -> viewModel.cycleCategory(if (event.side == Side.LEFT) -1 else 1)
                         // 统计页：LB/RB 切日周月年周期（任务 13，仅本页生效，不穿透其它页）
                         MainTab.STATS -> {
-                            // 任务 13：LB/RB 切日周月年周期（仅本页生效）。
-                            // 修复：Kotlin 负数取模问题——LEFT 在 idx=0 时 idx-1=-1，-1 % 4 = -1
-                            // 导致 order[-1] IndexOutOfBounds 崩溃。统一 +order.size 后再取模避免越界。
-                            val order = cn.mocabolka.run.ui.components.selectableStatsPeriods
-                            val idx = order.indexOf(statsPeriod).let { if (it < 0) 0 else it }
-                            val delta = if (event.side == Side.LEFT) -1 else 1
-                            statsPeriod = order[(idx + delta + order.size) % order.size]
+                            // LB/RB 循环切换子 Tab（速览 → 使用详情 → 通知历史 → …），全局生效。
+                            // 原「通知历史换日 / 使用详情周期」已分别迁到方向键左右、X 键。
+                            haptics.click()
+                            statsControl.cycleSubTab(if (event.side == Side.LEFT) -1 else 1)
                         }
                         // 搜索页 LIST 态：LB/RB 翻页（±5 项），INPUT 态不操作
                         MainTab.SEARCH -> {
@@ -1164,6 +1301,11 @@ fun HomeScreen(
                 // else 仅用于满足穷尽性。
                 else -> { /* 无操作 */ }
             }
+            } catch (e: Throwable) {
+                // 单事件异常就地吞掉：绝不取消 collectLatest 协程，保证右摇杆滚动引擎持续可用
+                // （否则 rightStickY 不再更新 → 全 Tab 右摇杆滚动全局失效）。
+                android.util.Log.w("ReverieHome", "gamepad event handling failed: ${e.message}", e)
+            }
         }
     }
 
@@ -1186,15 +1328,22 @@ fun HomeScreen(
                 // 确认弹窗内容较短，无需右摇杆滚动；信息弹窗正文可能超长，右摇杆滚动其正文。
                 DialogLayer.SETTINGS_CONFIRM -> return
                 DialogLayer.SETTINGS_INFO -> { infoScrollByPx.value?.invoke(delta); return }
+                // 更新提示弹窗内容较短，无需右摇杆滚动。
+                DialogLayer.UPDATE -> return
                 DialogLayer.NONE -> { /* 落到下方页面级分发 */ }
             }
             when (currentTabRef.value) {
                 MainTab.STATS -> {
-                    // 宽屏双栏（重构）：左栏=应用排行(statsListState)、右栏=总览总计(statsLeftScrollState)。
-                    // 右摇杆仅在右栏(总计)滚动；左栏(排行)滚动由左摇杆焦点驱动 scrollToItem。
-                    // 跨栏已移除：右摇杆恒滚右栏(总计)，不随焦点侧切换。
-                    statsLeftScrollState.scrollBy(delta)   // 右栏总览(总计)
-                    statsListState.scrollBy(delta)         // 左栏排行同步滚动（P0-2 修复右摇杆滚动+焦点定位）
+                    // 窄屏单栏（含手机横屏/中等屏）：内容统一在 statsListState(LazyColumn)，右摇杆直接滚它。
+                    //   速览子 Tab 的焦点在总览控件(OVERVIEW/LEFT_LIST)，右摇杆滚 statsListState 即滚整页。
+                    // 宽屏双栏：左栏=应用排行(statsListState)、右栏=总览总计(statsLeftScrollState)，
+                    //   右摇杆恒滚右栏(总计)，不随焦点侧切换；左栏同步滚动以保双栏内容对齐。
+                    if (isWideScreen) {
+                        statsLeftScrollState.scrollBy(delta)   // 右栏总览(总计)
+                        statsListState.scrollBy(delta)         // 左栏排行同步滚动（P0-2 修复右摇杆滚动+焦点定位）
+                    } else {
+                        statsListState.scrollBy(delta)         // 单栏：整页内容滚动
+                    }
                 }
                 MainTab.SEARCH -> searchListState.scrollBy(delta)
                 MainTab.SETTINGS -> {
@@ -1250,9 +1399,11 @@ fun HomeScreen(
                     viewModel.setFocused(pkg)
                 }
             }
-        } else if (tab == MainTab.STATS && statsFocusSide == FocusSide.LEFT_LIST) {
-            // P0-2 / 手柄全链路重构：仅当焦点在 RANK 区时，右摇杆停杆后把排行焦点回写到首个可视项，
-            // 使"右摇杆停在哪、焦点就跟到哪"。OVERVIEW 区焦点在总览控件上，不回写排行（避免焦点错位）。
+        } else if (tab == MainTab.STATS && statsFocusSide == FocusSide.LEFT_LIST
+            && statsControl.currentSubTab != StatsSubTab.OVERVIEW.ordinal) {
+            // P0-2 / 手柄全链路重构：仅当焦点在 RANK 区且当前为「有排行」子 Tab 时，
+            // 右摇杆停杆后把排行焦点回写到首个可视项，使"右摇杆停在哪、焦点就跟到哪"。
+            // 速览子 Tab 无排行(焦点在 OVERVIEW 总览控件上)，不回写 statsFocusIndex（避免焦点错位到空排行）。
             val idx = statsListState.firstVisibleItemIndex.coerceIn(0, (statsEntryCount - 1).coerceAtLeast(0))
             if (idx != statsFocusIndex) statsFocusIndex = idx
         }
@@ -1359,10 +1510,12 @@ fun HomeScreen(
 
 
     LandscapeTheme(
-        darkTheme = darkMode != DarkMode.LIGHT,
+        darkTheme = resolvePageTheme(hasArtOrCustom = false, settings = viewModel.settings).darkTheme,
         useMonet = useMonet,
         isAmoled = darkMode == DarkMode.AMOLED,
         glassSurface = glassSurface,
+        // 主屏已有实时穿透壁纸状态，直接传入驱动玻璃拟态最透档（让磨砂壁纸透出）
+        wallpaperBehind = wallpaperBehind,
         // 主屏已有实时手柄连接状态，直接传入驱动焦点框可见性
         gamepadConnected = gamepadConnected
     ) {
@@ -1606,7 +1759,39 @@ fun HomeScreen(
                         statsTab = MainTab.STATS,
                         searchTab = MainTab.SEARCH,
                         settingsTab = MainTab.SETTINGS,
-                        showGamepadHints = gamepadConnected
+                        showGamepadHints = gamepadConnected,
+                        // 子 Tab 收折到顶栏由「横屏」驱动而非「宽屏」——手机横屏（宽度未达双栏阈值）
+                        // 同样收折子 Tab 进 StatusBar，但双栏布局仍仅宽屏启用，二者解耦。
+                        showSubTabHint = currentTab == MainTab.STATS && isLandscape,
+                        // 横屏（手机/平板）：统计页子 Tab 滑块内联注入 StatusBar 主 Row 中间位置，
+                        // 真正「收折在全局主 Tab 行」，不再下方独立成行（早期版本曾把子 Tab 放在主 Tab
+                        // 行下方独立子标题行渲染，被解读为「在底部独立展示」，本轮改为同行收折）。
+                        // 竖屏/非 STATS 页留空（子 Tab 滑块改在 StatsScreen 内独立成行）。
+                        subHeaderContent = if (currentTab == MainTab.STATS && isLandscape) {
+                            {
+                                // 子 Tab 滑块本身（LB + 滑块）：由 StatusBar 主 Row 中间位置承载，
+                                // 不再外层 Row + weight，LB 在子 Tab 左侧、RB 由 StatusBar 主行 RIGHT 段按 showSubTabHint 显示。
+                                // fillMaxWidth=false：按内容自适应宽度（标题栏内联模式），不要撑满主 Row 中间剩余宽度
+                                // （避免与右侧主 Tab 滑块争抢空间导致主 Tab 被挤掉）。
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Dimens.xs)
+                                ) {
+                                    GamepadVisible {
+                                        KeyBadge(text = "LB")
+                                    }
+                                    ReverieSegmentedRow(
+                                        items = StatsSubTab.entries.toList(),
+                                        selected = statsSubTab,
+                                        onSelect = { statsSubTab = it },
+                                        label = { it.label },
+                                        fillMaxWidth = false
+                                    )
+                                }
+                            }
+                        } else {
+                            {}
+                        }
                     )
 
                     // Tab 内容：AnimatedContent 切换主列表 / 设置
@@ -1740,6 +1925,8 @@ fun HomeScreen(
                                 onFocus = { statsFocusedPackage = it },
                                 onEntryCountChange = { statsEntryCount = it },
                                 onSelectPeriod = { statsPeriod = it },
+                                statsSubTab = statsSubTab,
+                                onSubTabChange = { statsSubTab = it },
                                 onEntryClick = { pkg ->
                                     val app = viewModel.apps.value
                                         .firstOrNull { it.packageName == pkg }
@@ -1758,10 +1945,16 @@ fun HomeScreen(
                                     }
                                 },
                                 cutoutAdapt = cutoutAdapt,
+                                // 宽屏判定单一真源：驱动双栏布局，必须来自父级同一个 isWideScreen。
+                                isWideScreen = isWideScreen,
+                                // 横屏判定单一真源：驱动子 Tab 收折到 StatusBar，
+                                // 必须与 StatusBar 的 showSubTabHint 用同一个 isLandscape，否则会错位/重复。
+                                isLandscape = isLandscape,
                                 // 手柄全链路重构：焦点区/控件槽/控件桥透传，打通排行·滑块·总览控件手柄交互。
+                                // 新双栏：左=趋势区(OVERVIEW) / 右=排行区(RANK)。RANK 现居右栏→RIGHT_PANEL。
                                 focusZone = if (statsFocusSide == FocusSide.RIGHT_PANEL)
-                                    cn.mocabolka.run.ui.components.StatsFocusZone.OVERVIEW
-                                else cn.mocabolka.run.ui.components.StatsFocusZone.RANK,
+                                    cn.mocabolka.run.ui.components.StatsFocusZone.RANK
+                                else cn.mocabolka.run.ui.components.StatsFocusZone.OVERVIEW,
                                 overviewFocusIndex = statsOverviewIndex,
                                 control = statsControl
                             )
@@ -2006,6 +2199,18 @@ fun HomeScreen(
                             .padding(horizontal = Dimens.md, vertical = Dimens.sm)
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
+                            // ── 最近通知卡片：与详情浮窗平级并列，置于浮窗顶端之上（非浮窗内部）。
+                            // 仅展示当前详情应用自己的通知（按 packageName 过滤，最多 2 条），
+                            // 无该应用通知时不渲染、无占位。
+                            val appNotifications = focusedApp?.let { app ->
+                                recentNotifications.filter { it.packageName == app.packageName }
+                            }.orEmpty().take(2)
+                            if (appNotifications.isNotEmpty()) {
+                                RecentNotificationsCard(
+                                    items = appNotifications,
+                                    modifier = Modifier.padding(bottom = Dimens.sm)
+                                )
+                            }
                             // 顶部拖拽指示条
                             Box(
                                 modifier = Modifier
@@ -2013,7 +2218,7 @@ fun HomeScreen(
                                     .padding(bottom = Dimens.xs)
                                     .width(40.dp)
                                     .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
+                                    .clip(RoundedCornerShape(Dimens.RadiusXxs))
                                     .background(SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Faint))
                                     .clickable(
                                         interactionSource = remember { MutableInteractionSource() },
@@ -2221,12 +2426,39 @@ fun HomeScreen(
                 )
             }
         }
-    }
 
+        // 应用内更新提示弹窗（2026-07-30）：检测到远端新版本时弹出。
+        // 可见性 = pendingUpdate 非空 且 事件层已切到 UPDATE（等其它弹窗关闭后才接管，避免层级互踩）。
+        AnimatedVisibility(
+            visible = pendingUpdate != null && currentDialogLayer == DialogLayer.UPDATE,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(1f),
+            enter = MotionMachines.dialogEnter(),
+            exit = MotionMachines.dialogExit()
+        ) {
+            // 退场动画期间 pendingUpdate 已被置 null：锁存最后一个非空值供退场帧渲染。
+            val latched = remember { mutableStateOf(pendingUpdate) }
+            pendingUpdate?.let { latched.value = it }
+            latched.value?.let { remote ->
+                UpdateDialog(
+                    remoteVersion = remote,
+                    onDownload = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(remote.downloadUrl)))
+                        }
+                        viewModel.dismissUpdate()
+                    },
+                    onSkip = { viewModel.skipUpdateVersion(remote.versionCode) },
+                    onDismiss = { viewModel.dismissUpdate() }
+                )
+            }
+        }
     }
+}
 
 /** 时段问候语：早 / 中 / 下午 / 晚上好（5-11 早，12-13 中，14-18 下午，19-4 晚上）。 */
-private fun greetingByHour(): String {
+fun greetingByHour(): String {
     val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
     return when (hour) {
         in 5..10 -> "早上好"
@@ -2301,7 +2533,7 @@ private fun CategoryTabsRow(
                             Spacer(Modifier.size(4.dp))
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(Dimens.RadiusMd))
                                     .background(
                                         if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
                                         else SurfaceTokens.mutedOnSurface(SurfaceTokens.MutedLevel.Faint)
@@ -2483,7 +2715,7 @@ private fun AppList(
  * 跨栏语义（主页）：仅十字键(D-pad)允许左右跨栏（左/右详情面板）；
  *   左摇杆左右仅等同 LB/RB 切 App 分类，不允许跨栏。
  */
-private fun handleSettingsEvent(
+fun handleSettingsEvent(
     event: GamepadEvent,
     currentRow: Int,
     haptics: Haptics,
@@ -2575,7 +2807,7 @@ private fun handleSettingsEvent(
  */
 @SuppressLint("MissingPermission")
 @Composable
-private fun WallpaperBackground(modifier: Modifier = Modifier) {
+fun WallpaperBackground(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val wallpaperBitmap: ImageBitmap? = remember {
         runCatching {
@@ -2597,14 +2829,14 @@ private fun WallpaperBackground(modifier: Modifier = Modifier) {
  * 顶级 Tab 枚举：主界面 / 设置 平行切换（替代原浮层 SettingsDialog）。
  * 切换时使用 AnimatedContent + slideInHorizontally + fadeIn 过渡。
  */
-private enum class MainTab { HOME, STATS, SEARCH, SETTINGS }
+enum class MainTab { HOME, STATS, SEARCH, SETTINGS }
 
 /**
  * R13 省电：观察宿主 Lifecycle，返回应用是否处于「可见」状态（STARTED/RESUMED）。
  * 用于驱动氛围背景等无限动画在后台/熄屏时暂停，消除空闲 GPU 负载。
  */
 @Composable
-private fun rememberAppVisible(): State<Boolean> {
+fun rememberAppVisible(): State<Boolean> {
     val owner = LocalLifecycleOwner.current
     val visible = remember(owner) {
         mutableStateOf(owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
@@ -2621,14 +2853,14 @@ private fun rememberAppVisible(): State<Boolean> {
 }
 
 /** 主页 Tab 内左右焦点侧：主列表 ↔ 右侧详情面板（21:9 宽屏专用） */
-private enum class FocusSide { LEFT_LIST, RIGHT_PANEL }
+enum class FocusSide { LEFT_LIST, RIGHT_PANEL }
 
 /**
  * 详情面板内可聚焦按钮数（0=启动 / 1=收藏 / 2=信息）。
  * 卸载(3) / 强制停止(4) 已在 AppDetailPanel 中暂时隐藏（无法不跳设置即执行），
  * 故焦点导航上界收窄到 3；若日后恢复，改回 5 并取消 AppDetailPanel 中的注释。
  */
-private const val DETAIL_BUTTON_COUNT = 3
+const val DETAIL_BUTTON_COUNT = 3
 
 // 右摇杆滚动物理常量已归一化至 cn.mocabolka.run.gamepad.RightStickScroll（唯一真源），
 // 主页引擎与子页面 SubPageGamepad 共用，此处不再各自定义。
@@ -2638,7 +2870,7 @@ private const val DETAIL_BUTTON_COUNT = 3
  * 抽出独立组件以配合 AnimatedContent 切换。
  */
 @Composable
-private fun HomeTabContent(
+fun HomeTabContent(
     isWideScreen: Boolean,
     detailSideWidth: Dp,
     gamepadConnected: Boolean,
@@ -3123,7 +3355,7 @@ private fun SearchTabContent(
  * Tab = SETTINGS 时直接渲染 SettingsPage（已是 Tab 一级，无浮层遮罩、无返回按钮）。
  */
 @Composable
-private fun SettingsTabContent(
+fun SettingsTabContent(
     darkMode: DarkMode,
     onDarkModeChange: (DarkMode) -> Unit,
     sortMode: SortMode,
