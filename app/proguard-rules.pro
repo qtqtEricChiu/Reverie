@@ -10,6 +10,18 @@
 -keep class cn.mocabolka.run.compat.NotificationBadgeService { *; }
 -keep class cn.mocabolka.run.compat.OrientationLockService { *; }
 
+# ── 反射可达的 Service 回调（避免 R8 误删导致 ANR / Crash） ──
+-keepclassmembers class * extends android.app.Service {
+    public void onCreate();
+    public int onStartCommand(android.content.Intent, int, int);
+    public void onDestroy();
+    public android.os.IBinder onBind(android.content.Intent);
+}
+-keepclassmembers class * extends android.service.notification.NotificationListenerService {
+    public void onNotificationPosted(android.service.notification.StatusBarNotification);
+    public void onNotificationRemoved(android.service.notification.StatusBarNotification);
+}
+
 # ── ViewModel ──
 -keep class cn.mocabolka.run.viewmodel.HomeViewModel { *; }
 

@@ -33,6 +33,7 @@ android {
                 val tmpFile = File.createTempFile("reverie", ".keystore")
                 tmpFile.deleteOnExit()
                 tmpFile.writeBytes(Base64.getDecoder().decode(keystoreBase64.trim()))
+                storeType = "JKS"
                 storeFile = tmpFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS")
